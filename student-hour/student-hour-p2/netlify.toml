@@ -1,9 +1,27 @@
+
 [build]
+
   base    = "student-hour/student-hour-p2/client"
+
   command = "npm run build"
+
   publish = "dist"
 
 [[redirects]]
-  from   = "/*"
-  to     = "/index.html"
+
+  from   = "/api/*"
+
+  to     = "https://nova-vzcm.onrender.com/api/:splat"
+
   status = 200
+
+  force  = true
+
+[[redirects]]
+
+  from   = "/*"
+
+  to     = "/index.html"
+
+  status = 200
+

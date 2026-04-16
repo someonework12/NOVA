@@ -1,144 +1,94 @@
-# The Student Hour — Phase 2
+# The Student Hour — Phase 4
 
-## What changed from Phase 1
-- Anthropic replaced with Groq (free, fast, Llama 3 70B)
-- Real-time group chat (Supabase Realtime)
-- Professor Nova full chat UI with Three.js avatar
-- Student dashboard with sidebar navigation
-- Tutor dashboard: resource uploads, task assignment, group progress
-- Admin dashboard: generate tutor logins, assign tutors, run AI grouping
-- AuthProvider properly wrapping whole app
+## THE MOST IMPORTANT THING — WHY YOUR API WAS 404ing
+
+Your API calls were hitting Netlify (which has no backend) instead of Render.
+The `_redirects` file is now generated at BUILD TIME from your `VITE_API_URL` env variable.
+
+**You MUST set this in Netlify:**
+1. Netlify dashboard → your site → Site configuration → Environment variables
+2. Add: `VITE_API_URL` = `https://your-render-app.onrender.com`  (no trailing slash)
+3. Trigger a new Netlify deploy
 
 ---
 
-## First time setup (fresh Codespace)
+## Netlify Environment Variables (set all of these)
+
+| Variable | Value |
+|---|---|
+| `VITE_SUPABASE_URL` | `https://xxxx.supabase.co` |
+| `VITE_SUPABASE_ANON_KEY` | your anon key |
+| `VITE_API_URL` | `https://your-app.onrender.com` |
+
+## Render Environment Variables (set all of these)
+
+| Variable | Value |
+|---|---|
+| `SUPABASE_URL` | `https://xxxx.supabase.co` |
+| `SUPABASE_SERVICE_ROLE_KEY` | your service role key |
+| `GROQ_API_KEY` | from console.groq.com |
+| `CLIENT_URL` | `https://your-site.netlify.app` |
+| `PORT` | `3001` |
+
+---
+
+## How tutor login works
+
+1. Admin dashboard → Manage Tutors → fill in name + email → Generate
+2. A temp password is shown (e.g. `Tutor@A1B2C3D4`)
+3. Share the email + temp password with the tutor directly (WhatsApp, email, etc.)
+4. Tutor goes to your site → Log in → uses that email + temp password
+5. They land on the Tutor Dashboard
+
+---
+
+## Apply Phase 4 to your repo
 
 ```bash
-# 1. Unzip
-unzip student-hour-phase2.zip -d student-hour && cd student-hour
-
-# 2. Install all dependencies
-npm run install:all
-
-# 3. Set up environment variables
-cp .env.example client/.env
-cp .env.example server/.env
-# Then edit both files with your real keys (see below)
-
-# 4. Run
-npm run dev
+cd /workspaces/NOVA/student-hour
+unzip -o ~/Downloads/student-hour-phase4.zip
+npm install
 ```
+
+Then commit and push — Netlify auto-deploys.
 
 ---
 
-## Upgrading from Phase 1
+## Supabase: run this if you haven't yet
 
-If you already have Phase 1 running, run this patch instead:
-
-```bash
-# In your existing student-hour folder:
-unzip student-hour-phase2.zip -o
-npm run install:all
-npm run dev
-```
-
----
-
-## Environment variables
-
-### `client/.env`
-```
-VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
-VITE_SUPABASE_ANON_KEY=your_anon_key
-```
-
-### `server/.env`
-```
-PORT=3001
-CLIENT_URL=http://localhost:5173
-SUPABASE_URL=https://YOUR_PROJECT.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
-GROQ_API_KEY=your_groq_api_key
-```
-
-**Get your free Groq key:** https://console.groq.com
-(Sign up → API Keys → Create key. It's free.)
-
----
-
-## Supabase setup (if not done in Phase 1)
-
-1. Create project at https://supabase.com
-2. SQL Editor → paste entire `supabase/migrations/001_initial_schema.sql` → Run
-3. Copy Project URL + anon key + service_role key into your `.env` files
-
----
-
-## Make yourself admin
-
-After signing up on the site:
 ```sql
--- Run in Supabase SQL Editor
-update profiles set role = 'admin' where email = 'your@email.com';
+-- In Supabase SQL Editor:
+
+create table if not exists reading_schedules (
+  id uuid primary key default gen_random_uuid(),
+  student_id uuid references profiles(id) on delete cascade,
+  schedule_data jsonb not null,
+  weeks_ahead int default 1,
+  generated_at timestamptz default now(),
+  unique(student_id)
+);
+
+alter table reading_schedules enable row level security;
+
+create policy "Students manage own schedule"
+  on reading_schedules for all using (auth.uid() = student_id);
 ```
 
 ---
 
-## URLs when running
+## What changed in Phase 4
 
-| URL | What it is |
-|-----|------------|
-| http://localhost:5173 | Landing page |
-| http://localhost:5173/signup | Student signup |
-| http://localhost:5173/login | Login (all roles) |
-| http://localhost:5173/dashboard | Student dashboard |
-| http://localhost:5173/dashboard/nova | Professor Nova |
-| http://localhost:5173/tutor | Tutor dashboard |
-| http://localhost:5173/admin | Admin dashboard |
-| http://localhost:3001/api/health | API health check |
+### Bug fixes
+- API calls now reach Render correctly (root cause of ALL 404 errors fixed)
+- Logged-in users auto-redirected to their dashboard from landing/login/signup
+- OnboardingPage now redirects if already completed
+- CORS fixed to work with Netlify + Render
+- Error messages shown properly when API fails
 
----
-
-## Project structure
-
-```
-student-hour/
-├── client/src/
-│   ├── pages/
-│   │   ├── LandingPage.jsx        — Public landing
-│   │   ├── SignupPage.jsx         — Student signup
-│   │   ├── LoginPage.jsx          — Login all roles
-│   │   ├── OnboardingPage.jsx     — Course weakness form
-│   │   ├── StudentDashboard.jsx   — Chat, tasks, resources
-│   │   ├── ProfessorNovaPage.jsx  — Nova chat + avatar
-│   │   ├── TutorDashboard.jsx     — Upload, assign, progress
-│   │   └── AdminDashboard.jsx     — Tutors, groups, AI grouping
-│   ├── components/
-│   │   ├── GroupChat.jsx          — Real-time chat component
-│   │   └── NovaAvatar.jsx         — Three.js avatar
-│   ├── hooks/
-│   │   ├── useAuth.jsx            — Auth state + AuthProvider
-│   │   ├── useGroup.js            — Group data fetching
-│   │   └── useChat.js             — Real-time chat hook
-│   └── lib/
-│       └── supabase.js            — Supabase client
-├── server/src/
-│   ├── index.js                   — Express server
-│   ├── middleware/auth.js         — JWT verification
-│   └── routes/
-│       ├── nova.js                — Prof Nova (Groq)
-│       ├── grouping.js            — AI grouping (Groq)
-│       ├── tutor.js               — Tutor actions
-│       └── admin.js               — Admin actions
-└── supabase/migrations/
-    └── 001_initial_schema.sql     — Full DB schema
-```
-
----
-
-## Phase 3 — coming next
-- Supabase Storage for file uploads
-- Reading schedule generator
-- Classroom mode (group Nova sessions)
-- Student progress tracking charts
-- Professor Nova personality document (full character brief)
+### New features
+- Professor Nova: classroom mode toggle (if you're in a group)
+- Professor Nova: suggestion buttons so you can start fast
+- Professor Nova: proper error display with retry
+- Professor Nova: session counter shows how many sessions together
+- Study schedule: fully working generate + display
+- All API calls now use `VITE_API_URL` correctly

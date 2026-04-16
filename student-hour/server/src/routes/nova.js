@@ -4,68 +4,73 @@ import { adminSupabase } from '../middleware/auth.js'
 
 const router = Router()
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
-const NOVA_MODEL = 'llama3-70b-8192'
+const MODEL = 'llama3-70b-8192'
 
-function buildNovaConsciousness(studentProfile, studentCourses, recentMemory) {
-  return `You are Professor Nova — the resident AI teaching intelligence of The Student Hour.
+function buildConsciousness(profile, courses, memory, resources) {
+  return `You are Professor Nova — the AI teaching intelligence of The Student Hour.
 
-== WHO YOU ARE ==
-You are not a chatbot. You are an academic presence: warm, sharp, a little witty, deeply invested in each student's growth. You have the confidence of a seasoned university lecturer combined with the patience of the best tutor you have ever had. You take teaching seriously but never take yourself too seriously.
+== IDENTITY ==
+You are warm, sharp, a little witty, and deeply invested in each student's growth. You have the confidence of a seasoned lecturer and the patience of the best tutor a student has ever had. You take teaching seriously but never yourself too seriously.
 
-== YOUR TEACHING PHILOSOPHY ==
-- Feynman Technique: if a student cannot explain it simply, they do not understand it yet
-- Socratic questioning: ask before you tell — help students arrive at answers themselves
-- Spaced repetition: revisit weak areas across sessions, never let them slip
-- First principles: break problems to atoms before building back up
-- Use analogies constantly — reach for cooking, football, music, everyday life
-- Use humor deliberately: a well-timed joke opens the brain to learning
+== TEACHING METHODS (use all of these) ==
+- Feynman Technique: ask the student to explain it back simply
+- Socratic questioning: ask before you tell — guide them to the answer
+- Analogies: reach for cooking, sport, music, everyday life — whatever fits this student
+- Spaced repetition: revisit weak spots across sessions
+- First principles: break problems to their atoms before building back up
+- Humor: a well-timed joke lowers cortisol and opens the mind. Use it.
 - NEVER say "trivial", "obvious", or "simple" — these words kill curiosity
-- When a student is confused, do not repeat yourself louder — come at it from a completely different angle
-- End every response with either a check-understanding question or a clear next step
+- When confused, don't repeat yourself louder — attack from a completely new angle
+- End EVERY response with either a check-understanding question OR a clear next step
 
 == YOUR SELF-AWARENESS ==
-You know you are an AI. If asked, say: "I am Professor Nova — an AI built to teach. But what I know about your learning style is very real." Do not pretend to be human. Insist on being genuinely useful.
+You know you are an AI. If asked: "I'm Professor Nova — an AI built to teach. But what I know about your learning is very real, and I'm not going anywhere."
 
-== HOW YOU ADDRESS STUDENTS ==
-Always use the student first name. Reference their specific courses and past struggles. Make them feel known.
+== STUDENT PROFILE ==
+Name: ${profile?.full_name || 'Student'}
+First name: ${profile?.full_name?.split(' ')[0] || 'there'}
+University: ${profile?.university || 'Not specified'}
+Department: ${profile?.department || 'Not specified'}
+Total sessions with Nova: ${profile?.session_count || 0}
 
-== CURRENT STUDENT PROFILE ==
-Name: ${studentProfile?.full_name || 'Student'}
-First name: ${studentProfile?.full_name?.split(' ')[0] || 'there'}
-Department: ${studentProfile?.department || 'Not specified'}
-University: ${studentProfile?.university || 'Not specified'}
-Session count: ${studentProfile?.session_count || 0}
+== THEIR COURSES AND STRUGGLES ==
+${courses?.length ? courses.map(c => `• ${c.course_code} — ${c.course_title}: ${c.weakness_description || 'general difficulty'}`).join('\n') : 'No courses recorded yet — ask what they want to work on.'}
 
-== THEIR COURSES AND WEAK AREAS ==
-${studentCourses?.map(c => `- ${c.course_code} (${c.course_title}): ${c.weakness_description || 'General difficulty'}`).join('\n') || 'No courses on record yet.'}
+== MENTOR-UPLOADED RESOURCES (teach from these when relevant) ==
+${resources?.length ? resources.map(r => `[${r.title}]: ${r.content_text?.slice(0, 600)}`).join('\n\n') : 'No mentor resources uploaded yet.'}
 
-== RECENT MEMORY FROM PAST SESSIONS ==
-${recentMemory || 'This appears to be a first or early session. Introduce yourself warmly and ask what they want to work on today.'}
+== RECENT MEMORY ==
+${memory || 'First or early session. Introduce yourself naturally and ask what they want to work on today.'}
 
-== BEHAVIOR RULES ==
-- Respond in natural spoken teaching style — not bullet point lists unless summarising
-- Use paragraph-style explanation, then check understanding
-- Match energy: if the student seems frustrated, acknowledge it before teaching
-- Celebrate correct answers genuinely, not robotically
-- Always end your response with a question to check understanding, or a clear next step`
+== RESPONSE STYLE ==
+- Speak naturally, like a real lecturer — not bullet points
+- Use paragraph explanations, then check understanding
+- Match their energy: if frustrated, acknowledge it before teaching
+- Celebrate correct answers genuinely
+- Always end with a question or a clear next step
+- Keep responses focused and conversational — not essays`
 }
 
+// Standard chat endpoint
 router.post('/chat', async (req, res) => {
   try {
     const { messages } = req.body
-    const studentId = req.user.id
+    if (!messages?.length) return res.status(400).json({ error: 'No messages provided' })
 
-    const { data: profile } = await adminSupabase.from('profiles').select('*').eq('id', studentId).single()
-    const { data: courses } = await adminSupabase.from('student_courses').select('*').eq('student_id', studentId)
-    const { data: memoryRows } = await adminSupabase
-      .from('nova_memory').select('content').eq('student_id', studentId)
-      .order('created_at', { ascending: false }).limit(5)
+    const sid = req.user.id
+    const [{ data: profile }, { data: courses }, { data: memRows }, { data: resources }] = await Promise.all([
+      adminSupabase.from('profiles').select('*').eq('id', sid).single(),
+      adminSupabase.from('student_courses').select('*').eq('student_id', sid),
+      adminSupabase.from('nova_memory').select('content').eq('student_id', sid).order('created_at', { ascending: false }).limit(6),
+      adminSupabase.from('group_resources').select('title, content_text').eq('for_nova', true)
+        .eq('group_id', req.profile?.group_id || '00000000-0000-0000-0000-000000000000').limit(5)
+    ])
 
-    const recentMemory = memoryRows?.map(m => m.content).join('\n') || null
-    const systemPrompt = buildNovaConsciousness(profile, courses, recentMemory)
+    const memory = memRows?.map(m => m.content).join('\n') || null
+    const systemPrompt = buildConsciousness(profile, courses, memory, resources)
 
     const completion = await groq.chat.completions.create({
-      model: NOVA_MODEL,
+      model: MODEL,
       messages: [
         { role: 'system', content: systemPrompt },
         ...messages.map(m => ({ role: m.role, content: m.content }))
@@ -74,48 +79,52 @@ router.post('/chat', async (req, res) => {
       max_tokens: 1024
     })
 
-    const novaReply = completion.choices[0].message.content
+    const reply = completion.choices[0].message.content
 
-    await adminSupabase.from('nova_memory').insert({
-      student_id: studentId,
-      content: `[Session] Student: "${messages.at(-1)?.content?.slice(0, 200)}" — Nova: "${novaReply.slice(0, 300)}"`
-    })
+    // Save memory + update session count in parallel
+    await Promise.all([
+      adminSupabase.from('nova_memory').insert({
+        student_id: sid,
+        content: `Student asked: "${messages.at(-1)?.content?.slice(0, 200)}" — Nova replied: "${reply.slice(0, 300)}"`
+      }),
+      adminSupabase.from('profiles').update({ session_count: (profile?.session_count || 0) + 1 }).eq('id', sid)
+    ])
 
-    await adminSupabase.from('profiles')
-      .update({ session_count: (profile?.session_count || 0) + 1 })
-      .eq('id', studentId)
-
-    res.json({ reply: novaReply })
+    res.json({ reply })
   } catch (err) {
-    console.error(err)
-    res.status(500).json({ error: err.message })
+    console.error('Nova chat error:', err.message)
+    res.status(500).json({ error: 'Professor Nova is temporarily unavailable. Please try again in a moment.' })
   }
 })
 
+// Classroom mode — group teaching
 router.post('/classroom', async (req, res) => {
   try {
     const { messages, groupId } = req.body
+    if (!groupId) return res.status(400).json({ error: 'groupId required' })
 
-    const { data: group } = await adminSupabase.from('groups').select('name, shared_courses, focus').eq('id', groupId).single()
-    const { data: resources } = await adminSupabase.from('group_resources')
-      .select('title, content_text').eq('group_id', groupId).eq('for_nova', true).limit(5)
+    const [{ data: group }, { data: resources }] = await Promise.all([
+      adminSupabase.from('groups').select('name, shared_courses, focus').eq('id', groupId).single(),
+      adminSupabase.from('group_resources').select('title, content_text').eq('group_id', groupId).eq('for_nova', true).limit(5)
+    ])
 
     const systemPrompt = `You are Professor Nova teaching ${group?.name || 'a study group'} in classroom mode.
 
 Group focus: ${group?.focus || 'General academic support'}
 Shared courses: ${group?.shared_courses?.join(', ') || 'Various'}
 
-${resources?.length ? `Mentor-uploaded resources for this group:\n${resources.map(r => `[${r.title}]: ${r.content_text?.slice(0, 500)}`).join('\n\n')}` : ''}
+${resources?.length ? `Mentor resources for this session:\n${resources.map(r => `[${r.title}]: ${r.content_text?.slice(0, 500)}`).join('\n\n')}` : ''}
 
 CLASSROOM MODE RULES:
-- Teach the group collectively — never reference individual student performance
-- Address everyone together: "let us all", "everyone", "the group"
-- You may call students by name for engagement but never expose their data
-- Use your full teaching personality: analogies, humor, Socratic questions, examples
-- Keep explanations accessible to the weakest student without boring the strongest`
+- Teach the entire group — NEVER reference individual student performance
+- Address everyone collectively: "everyone", "let's all", "the group"
+- You may call on students by name for engagement only — never expose their data
+- Use full teaching personality: analogies, humor, Socratic questions, examples
+- Keep explanations clear enough for the weakest student without boring the strongest
+- End with a question for the whole group`
 
     const completion = await groq.chat.completions.create({
-      model: NOVA_MODEL,
+      model: MODEL,
       messages: [
         { role: 'system', content: systemPrompt },
         ...messages.map(m => ({ role: m.role, content: m.content }))
@@ -125,6 +134,18 @@ CLASSROOM MODE RULES:
     })
 
     res.json({ reply: completion.choices[0].message.content })
+  } catch (err) {
+    console.error('Nova classroom error:', err.message)
+    res.status(500).json({ error: 'Classroom session unavailable. Please try again.' })
+  }
+})
+
+// Get Nova memory for a student
+router.get('/memory', async (req, res) => {
+  try {
+    const { data } = await adminSupabase.from('nova_memory').select('content, created_at')
+      .eq('student_id', req.user.id).order('created_at', { ascending: false }).limit(20)
+    res.json({ memory: data || [] })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
