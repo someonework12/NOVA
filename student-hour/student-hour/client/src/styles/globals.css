@@ -1,0 +1,197 @@
+:root {
+  /* === Brand Colours === */
+  --brown-900: #3B1F0E;
+  --brown-800: #5C2E10;
+  --brown-700: #7A3D14;
+  --brown-600: #8B5E3C;
+  --brown-500: #A67C52;
+  --brown-400: #C49A72;
+  --brown-200: #E8D5C0;
+  --brown-100: #F3EAE0;
+  --brown-50:  #FAF5F0;
+
+  --yellow-500: #F5C842;
+  --yellow-400: #F7D46A;
+  --yellow-300: #FAE096;
+  --yellow-100: #FEF7DC;
+  --yellow-50:  #FFFDF0;
+
+  --surface:    #FDFAF7;
+  --surface-2:  #F5EFE8;
+  --border:     #E2D5C8;
+  --border-soft:#EDE4DA;
+
+  --text-primary:   #1A0F08;
+  --text-secondary: #5C4033;
+  --text-muted:     #9B7B68;
+  --text-inverse:   #FDFAF7;
+
+  /* === Typography === */
+  --font-sans:  'Inter', system-ui, sans-serif;
+  --font-serif: 'Playfair Display', Georgia, serif;
+
+  /* === Spacing & Radius === */
+  --radius-sm:  8px;
+  --radius-md:  14px;
+  --radius-lg:  20px;
+  --radius-xl:  28px;
+  --radius-full: 9999px;
+
+  /* === Shadows === */
+  --shadow-sm: 0 1px 3px rgba(58,31,14,0.08);
+  --shadow-md: 0 4px 16px rgba(58,31,14,0.10);
+  --shadow-lg: 0 8px 32px rgba(58,31,14,0.12);
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: var(--font-sans);
+  background: var(--surface);
+  color: var(--text-primary);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; text-decoration: none; }
+
+img { max-width: 100%; display: block; }
+
+button {
+  font-family: var(--font-sans);
+  cursor: pointer;
+  border: none;
+  outline: none;
+}
+
+input, textarea, select {
+  font-family: var(--font-sans);
+  outline: none;
+}
+
+/* === Utility Classes === */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--brown-700);
+  color: var(--text-inverse);
+  padding: 12px 28px;
+  border-radius: var(--radius-full);
+  font-size: 15px;
+  font-weight: 500;
+  transition: background 0.2s, transform 0.15s;
+}
+.btn-primary:hover {
+  background: var(--brown-800);
+  transform: translateY(-1px);
+}
+
+.btn-accent {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--yellow-500);
+  color: var(--brown-900);
+  padding: 12px 28px;
+  border-radius: var(--radius-full);
+  font-size: 15px;
+  font-weight: 600;
+  transition: background 0.2s, transform 0.15s;
+}
+.btn-accent:hover {
+  background: var(--yellow-400);
+  transform: translateY(-1px);
+}
+
+.btn-outline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: transparent;
+  color: var(--brown-700);
+  padding: 11px 27px;
+  border-radius: var(--radius-full);
+  border: 1.5px solid var(--brown-400);
+  font-size: 15px;
+  font-weight: 500;
+  transition: border-color 0.2s, background 0.2s;
+}
+.btn-outline:hover {
+  background: var(--brown-100);
+  border-color: var(--brown-600);
+}
+
+.card {
+  background: #fff;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  box-shadow: var(--shadow-sm);
+}
+
+.input-field {
+  width: 100%;
+  padding: 12px 16px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-md);
+  background: #fff;
+  font-size: 15px;
+  color: var(--text-primary);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.input-field:focus {
+  border-color: var(--brown-500);
+  box-shadow: 0 0 0 3px rgba(139,94,60,0.12);
+}
+.input-field::placeholder { color: var(--text-muted); }
+
+.label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.page-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+.section-title {
+  font-family: var(--font-serif);
+  font-size: clamp(28px, 4vw, 42px);
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 500;
+}
+.badge-yellow {
+  background: var(--yellow-100);
+  color: var(--brown-800);
+}
+.badge-brown {
+  background: var(--brown-100);
+  color: var(--brown-800);
+}
