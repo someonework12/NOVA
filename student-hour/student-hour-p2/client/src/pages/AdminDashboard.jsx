@@ -30,7 +30,7 @@ export default function AdminDashboard() {
 
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-      <div style={{ width: 240, background: 'var(--brown-900)', display: 'flex', flexDirection: 'column', height: '100vh', flexShrink: 0 }}>
+      <div className="nova-sidebar" style={{ width: 240, background: 'var(--brown-900)', display: 'flex', flexDirection: 'column', height: '100vh', flexShrink: 0 }}>
         <div style={{ padding: '28px 24px 20px' }}>
           <div style={{ fontSize: 11, color: 'var(--yellow-400)', marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Admin</div>
           <div style={{ fontSize: 15, fontWeight: 600, color: '#fff' }}>{profile?.full_name?.split(' ')[0] || 'Admin'}</div>
@@ -55,7 +55,7 @@ export default function AdminDashboard() {
         {active === 'overview' && (
           <div>
             <h1 style={{ fontFamily: 'var(--font-serif)', fontSize: 26, color: 'var(--brown-900)', marginBottom: 28 }}>Platform Overview</h1>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20, marginBottom: 32 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 20, marginBottom: 32 }}>
               {[
                 { label: 'Total students', value: stats.studentCount ?? '—' },
                 { label: 'Active groups', value: stats.groupCount ?? '—' },
@@ -102,7 +102,7 @@ function TutorManager() {
       <h2 style={{ fontFamily: 'var(--font-serif)', fontSize: 22, color: 'var(--brown-900)', marginBottom: 24 }}>Generate Tutor Login</h2>
       <form onSubmit={createTutor} className="card" style={{ display: 'flex', flexDirection: 'column', gap: 16, marginBottom: 32 }}>
         <p style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.7 }}>Tutors do not sign up themselves. You generate their credentials here and share them directly.</p>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14 }}>
           <div>
             <label className="label">Full name</label>
             <input className="input-field" placeholder="Tutor's full name" value={form.fullName} onChange={e => setForm({ ...form, fullName: e.target.value })} required />

@@ -32,8 +32,8 @@ export default function TutorDashboard() {
 
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-      <div style={{ width: 240, background: 'var(--brown-800)', display: 'flex', flexDirection: 'column', height: '100vh', flexShrink: 0 }}>
-        <div style={{ padding: '28px 24px 20px' }}>
+      <div className="nova-sidebar" style={{ width: 240, background: 'var(--brown-800)', display: 'flex', flexDirection: 'column', height: '100vh', flexShrink: 0 }}>
+        <div className="nova-sidebar-header" style={{ padding: '28px 24px 20px' }}>
           <div style={{ fontSize: 11, color: 'var(--brown-400)', marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Tutor Dashboard</div>
           <div style={{ fontSize: 15, fontWeight: 600, color: '#fff' }}>{firstName}</div>
           {group && <div style={{ fontSize: 12, color: 'var(--brown-400)', marginTop: 6 }}>Group: {group.name}</div>}
@@ -54,7 +54,7 @@ export default function TutorDashboard() {
         </div>
       </div>
 
-      <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--surface)' }}>
+      <main className="nova-main" style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--surface)' }}>
         <div style={{ padding: '14px 28px', borderBottom: '1px solid var(--border-soft)', background: '#fff', minHeight: 56, display: 'flex', alignItems: 'center' }}>
           <span style={{ fontWeight: 600, fontSize: 15, color: 'var(--brown-900)' }}>
             {navItems.find(i => i.id === active)?.label}
