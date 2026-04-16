@@ -1,5 +1,7 @@
 node_modules/
-.env
 dist/
-.DS_Store
-*.local
+.env
+.env.local
+package-lock.json
+client/public/_redirects
+*.DS_Store

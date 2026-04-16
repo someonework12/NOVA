@@ -1,94 +1,78 @@
-# The Student Hour — Phase 4
+# The Student Hour — Phase 5
 
-## THE MOST IMPORTANT THING — WHY YOUR API WAS 404ing
+## Unzip command (copy this exactly)
 
-Your API calls were hitting Netlify (which has no backend) instead of Render.
-The `_redirects` file is now generated at BUILD TIME from your `VITE_API_URL` env variable.
+```bash
+cd /workspaces/NOVA/student-hour && unzip -o ~/Downloads/student-hour-phase5.zip
+```
 
-**You MUST set this in Netlify:**
-1. Netlify dashboard → your site → Site configuration → Environment variables
-2. Add: `VITE_API_URL` = `https://your-render-app.onrender.com`  (no trailing slash)
-3. Trigger a new Netlify deploy
+That's it. The zip extracts directly into your repo. Then:
+
+```bash
+git add -A && git commit -m "Phase 5" && git push
+```
+
+Netlify auto-deploys. Done.
 
 ---
 
-## Netlify Environment Variables (set all of these)
+## Environment variables — set these ONCE in Netlify
+
+Go to: Netlify → your site → Site configuration → Environment variables
 
 | Variable | Value |
 |---|---|
 | `VITE_SUPABASE_URL` | `https://xxxx.supabase.co` |
 | `VITE_SUPABASE_ANON_KEY` | your anon key |
-| `VITE_API_URL` | `https://your-app.onrender.com` |
+| `VITE_API_URL` | `https://your-render-app.onrender.com` (NO trailing slash) |
 
-## Render Environment Variables (set all of these)
+---
+
+## Environment variables — set these in Render
+
+Go to: Render → your service → Environment
 
 | Variable | Value |
 |---|---|
 | `SUPABASE_URL` | `https://xxxx.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | your service role key |
-| `GROQ_API_KEY` | from console.groq.com |
+| `GROQ_API_KEY` | from console.groq.com (free) |
 | `CLIENT_URL` | `https://your-site.netlify.app` |
-| `PORT` | `3001` |
 
 ---
 
-## How tutor login works
+## Supabase — run this SQL patch if you haven't yet
 
-1. Admin dashboard → Manage Tutors → fill in name + email → Generate
-2. A temp password is shown (e.g. `Tutor@A1B2C3D4`)
-3. Share the email + temp password with the tutor directly (WhatsApp, email, etc.)
-4. Tutor goes to your site → Log in → uses that email + temp password
-5. They land on the Tutor Dashboard
+Copy the contents of `supabase/migrations/002_phase5_patch.sql` and run in Supabase SQL Editor.
 
 ---
 
-## Apply Phase 4 to your repo
+## How everything works now
 
-```bash
-cd /workspaces/NOVA/student-hour
-unzip -o ~/Downloads/student-hour-phase4.zip
-npm install
-```
+### Tutor login flow
+1. Admin dashboard → Manage Tutors → enter name + email → Generate
+2. Credentials appear on screen with a "Copy" button — email + password clearly shown
+3. Send them to the tutor (WhatsApp, email, etc.)
+4. Tutor goes to `/login` on your site and signs in
+5. They land directly on their Tutor Dashboard
 
-Then commit and push — Netlify auto-deploys.
+### Student flow
+1. Sign up → onboarding form (courses + weaknesses) → dashboard
+2. Admin runs AI grouping → student gets a group
+3. Student chats with group, uses Professor Nova personal + classroom mode
+4. Nova remembers every session and builds on it
 
----
+### Professor Nova
+- Full personality consciousness document injected every session
+- Personal mode: knows your name, courses, history
+- Classroom mode: teaches the whole group without exposing individuals
+- Suggestion buttons to get started fast
+- Session counter so Nova knows how many times you've met
 
-## Supabase: run this if you haven't yet
-
-```sql
--- In Supabase SQL Editor:
-
-create table if not exists reading_schedules (
-  id uuid primary key default gen_random_uuid(),
-  student_id uuid references profiles(id) on delete cascade,
-  schedule_data jsonb not null,
-  weeks_ahead int default 1,
-  generated_at timestamptz default now(),
-  unique(student_id)
-);
-
-alter table reading_schedules enable row level security;
-
-create policy "Students manage own schedule"
-  on reading_schedules for all using (auth.uid() = student_id);
-```
-
----
-
-## What changed in Phase 4
-
-### Bug fixes
-- API calls now reach Render correctly (root cause of ALL 404 errors fixed)
-- Logged-in users auto-redirected to their dashboard from landing/login/signup
-- OnboardingPage now redirects if already completed
-- CORS fixed to work with Netlify + Render
-- Error messages shown properly when API fails
-
-### New features
-- Professor Nova: classroom mode toggle (if you're in a group)
-- Professor Nova: suggestion buttons so you can start fast
-- Professor Nova: proper error display with retry
-- Professor Nova: session counter shows how many sessions together
-- Study schedule: fully working generate + display
-- All API calls now use `VITE_API_URL` correctly
+## What changed in Phase 5
+- Landing page shows "Go to dashboard" for logged-in users
+- Admin dashboard has clear credential display + copy button
+- Students list panel in admin
+- Nova has a complete personality + teaching principles document
+- SQL patch file for easy Supabase setup
+- .gitignore cleaned up — no more package-lock.json in git
