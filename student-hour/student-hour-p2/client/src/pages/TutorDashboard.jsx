@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { supabase } from '../lib/supabase.js'
 import GroupChat from '../components/GroupChat.jsx'
@@ -6,6 +7,7 @@ import GroupChat from '../components/GroupChat.jsx'
 export default function TutorDashboard() {
   const { profile, signOut } = useAuth()
   const [active, setActive] = useState('chat')
+  const [collapsed, setCollapsed] = useState(typeof window !== 'undefined' && window.innerWidth >= 768 ? false : true)
   const [assignment, setAssignment] = useState(null)
 
   useEffect(() => {
@@ -55,11 +57,7 @@ export default function TutorDashboard() {
       </div>
 
       <main className="nova-main" style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--surface)' }}>
-        <div style={{ padding: '14px 28px', borderBottom: '1px solid var(--border-soft)', background: '#fff', minHeight: 56, display: 'flex', alignItems: 'center' }}>
-          <span style={{ fontWeight: 600, fontSize: 15, color: 'var(--brown-900)' }}>
-            {navItems.find(i => i.id === active)?.label}
-          </span>
-        </div>
+        <div style={{ padding: '0 20px', height: 56, borderBottom: '1px solid var(--border-soft)', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}><div style={{ display: 'flex', alignItems: 'center', gap: 12 }}><button onClick={() => setCollapsed(!collapsed)} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4, padding: 4 }}><span style={{ display: 'block', width: 18, height: 2, background: 'var(--brown-900)', borderRadius: 2 }} /><span style={{ display: 'block', width: 18, height: 2, background: 'var(--brown-900)', borderRadius: 2 }} /><span style={{ display: 'block', width: 12, height: 2, background: 'var(--brown-900)', borderRadius: 2 }} /></button><span style={{ fontWeight: 600, fontSize: 14, color: 'var(--brown-900)' }}>{navItems.find(i => i.id === active)?.label}</span></div><Link to='/' style={{ fontSize: 12, color: 'var(--text-muted)', textDecoration: 'none' }}>← Home</Link></div>
         <div style={{ flex: 1, overflow: 'hidden' }}>
           {active === 'chat' && <GroupChat groupId={group?.id} groupName={group?.name} />}
           {active === 'upload' && <UploadResource groupId={group?.id} />}
