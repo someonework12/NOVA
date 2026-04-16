@@ -11,7 +11,7 @@
 
   from   = "/api/*"
 
-  to     = "https://nova-vzcm.onrender.com/api/:splat"
+  to     = "https://nova-vzcm.onrender.com"
 
   status = 200
 
