@@ -1,25 +1,28 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './hooks/useAuth.jsx'
-import LandingPage from './pages/LandingPage.jsx'
-import SignupPage from './pages/SignupPage.jsx'
-import LoginPage from './pages/LoginPage.jsx'
-import OnboardingPage from './pages/OnboardingPage.jsx'
-import StudentDashboard from './pages/StudentDashboard.jsx'
-import TutorDashboard from './pages/TutorDashboard.jsx'
-import AdminDashboard from './pages/AdminDashboard.jsx'
+import LandingPage       from './pages/LandingPage.jsx'
+import LoginPage         from './pages/LoginPage.jsx'
+import SignupPage        from './pages/SignupPage.jsx'
+import OnboardingPage    from './pages/OnboardingPage.jsx'
+import StudentDashboard  from './pages/StudentDashboard.jsx'
 import ProfessorNovaPage from './pages/ProfessorNovaPage.jsx'
+import TutorDashboard    from './pages/TutorDashboard.jsx'
+import AdminDashboard    from './pages/AdminDashboard.jsx'
 
 function Loading() {
-  return <div style={{ display:'flex', alignItems:'center', justifyContent:'center', minHeight:'100vh', background:'var(--surface)', color:'var(--text-muted)', fontSize:14 }}>Loading...</div>
+  return (
+    <div style={{
+      display:'flex', alignItems:'center', justifyContent:'center',
+      minHeight:'100vh', background:'var(--surface)',
+      color:'var(--text-muted)', fontSize:14
+    }}>Loading...</div>
+  )
 }
 
-// Home: show landing page always, redirect logged-in users to their dashboard
 function HomeRoute() {
   const { user, profile, loading } = useAuth()
   if (loading) return <Loading />
-  // Not logged in — show the landing page, stay here
   if (!user) return <LandingPage />
-  // Logged in — route to correct place
   if (profile?.role === 'admin') return <Navigate to="/admin" replace />
   if (profile?.role === 'tutor') return <Navigate to="/tutor" replace />
   if (!profile?.onboarding_complete) return <Navigate to="/onboarding" replace />
@@ -29,7 +32,7 @@ function HomeRoute() {
 function ProtectedRoute({ children, role }) {
   const { user, profile, loading } = useAuth()
   if (loading) return <Loading />
-  if (!user) return <Navigate to="/login" replace />
+  if (!user) return <Navigate to="/" replace />
   if (role && profile && profile.role !== role) {
     if (profile.role === 'admin') return <Navigate to="/admin" replace />
     if (profile.role === 'tutor') return <Navigate to="/tutor" replace />
@@ -56,10 +59,8 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <AppRoutes />
-      </AuthProvider>
-    </BrowserRouter>
+    <AuthProvider>
+      <AppRoutes />
+    </AuthProvider>
   )
 }

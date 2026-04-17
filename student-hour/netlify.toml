@@ -4,16 +4,14 @@
   publish = "dist"
 
 [build.environment]
-  NODE_VERSION = "20"
+  NODE_VERSION = "18"
 
-# Proxy all /api calls to Render backend
 [[redirects]]
   from   = "/api/*"
-  to     = "https://student-hour.onrender.com/api/:splat"
+  to     = "https://nova-vzcm.onrender.com/api/:splat"
   status = 200
   force  = true
 
-# SPA fallback
 [[redirects]]
   from   = "/*"
   to     = "/index.html"
