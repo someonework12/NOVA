@@ -1,44 +1,144 @@
-# The Student Hour — Phase 6
+# The Student Hour — Phase 2
 
-## Unzip command
+## What changed from Phase 1
+- Anthropic replaced with Groq (free, fast, Llama 3 70B)
+- Real-time group chat (Supabase Realtime)
+- Professor Nova full chat UI with Three.js avatar
+- Student dashboard with sidebar navigation
+- Tutor dashboard: resource uploads, task assignment, group progress
+- Admin dashboard: generate tutor logins, assign tutors, run AI grouping
+- AuthProvider properly wrapping whole app
+
+---
+
+## First time setup (fresh Codespace)
+
 ```bash
-cd /workspaces/NOVA/student-hour && unzip -o ~/Downloads/student-hour-phase6.zip
+# 1. Unzip
+unzip student-hour-phase2.zip -d student-hour && cd student-hour
+
+# 2. Install all dependencies
+npm run install:all
+
+# 3. Set up environment variables
+cp .env.example client/.env
+cp .env.example server/.env
+# Then edit both files with your real keys (see below)
+
+# 4. Run
+npm run dev
 ```
 
-Then push:
+---
+
+## Upgrading from Phase 1
+
+If you already have Phase 1 running, run this patch instead:
+
 ```bash
-git add -A && git commit -m "Phase 6 - voice + course management" && git push
+# In your existing student-hour folder:
+unzip student-hour-phase2.zip -o
+npm run install:all
+npm run dev
 ```
 
-## What was fixed
+---
 
-### 1. Nova 500 error — FIXED
-Groq SDK was on version 0.3.3 which is outdated. Upgraded to 0.9.0.
-Also added a proper error message when GROQ_API_KEY is missing.
+## Environment variables
 
-### 2. THREE is not defined — FIXED
-Removed Three.js entirely. NovaAvatar is now pure CSS animation — 
-no external deps, no errors, works on all browsers.
+### `client/.env`
+```
+VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+VITE_SUPABASE_ANON_KEY=your_anon_key
+```
 
-### 3. Nova voice — ADDED
-Professor Nova now speaks out loud using the browser's built-in 
-Web Speech API (free, no API key needed).
-- Nova reads every response aloud automatically
-- Students can speak to Nova using the microphone button
-- Voice can be toggled on/off
-- Each message has a "Replay" button to hear it again
-- Works in Chrome, Edge, Safari (not Firefox)
+### `server/.env`
+```
+PORT=3001
+CLIENT_URL=http://localhost:5173
+SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+GROQ_API_KEY=your_groq_api_key
+```
 
-### 4. My Courses tab — ADDED
-Students now have a "My Courses" tab in their dashboard where they can:
-- See all courses they added during onboarding
-- Add new courses at any time (code + title + weakness description)
-- Remove courses they no longer need help with
-Nova automatically reads these when teaching
+**Get your free Groq key:** https://console.groq.com
+(Sign up → API Keys → Create key. It's free.)
 
-## Render — make sure GROQ_API_KEY is set
-Go to Render → your service → Environment
-GROQ_API_KEY = your key from console.groq.com
+---
 
-## Voice works in: Chrome, Edge, Safari
-## Voice does NOT work in: Firefox (Firefox doesn't support Web Speech API)
+## Supabase setup (if not done in Phase 1)
+
+1. Create project at https://supabase.com
+2. SQL Editor → paste entire `supabase/migrations/001_initial_schema.sql` → Run
+3. Copy Project URL + anon key + service_role key into your `.env` files
+
+---
+
+## Make yourself admin
+
+After signing up on the site:
+```sql
+-- Run in Supabase SQL Editor
+update profiles set role = 'admin' where email = 'your@email.com';
+```
+
+---
+
+## URLs when running
+
+| URL | What it is |
+|-----|------------|
+| http://localhost:5173 | Landing page |
+| http://localhost:5173/signup | Student signup |
+| http://localhost:5173/login | Login (all roles) |
+| http://localhost:5173/dashboard | Student dashboard |
+| http://localhost:5173/dashboard/nova | Professor Nova |
+| http://localhost:5173/tutor | Tutor dashboard |
+| http://localhost:5173/admin | Admin dashboard |
+| http://localhost:3001/api/health | API health check |
+
+---
+
+## Project structure
+
+```
+student-hour/
+├── client/src/
+│   ├── pages/
+│   │   ├── LandingPage.jsx        — Public landing
+│   │   ├── SignupPage.jsx         — Student signup
+│   │   ├── LoginPage.jsx          — Login all roles
+│   │   ├── OnboardingPage.jsx     — Course weakness form
+│   │   ├── StudentDashboard.jsx   — Chat, tasks, resources
+│   │   ├── ProfessorNovaPage.jsx  — Nova chat + avatar
+│   │   ├── TutorDashboard.jsx     — Upload, assign, progress
+│   │   └── AdminDashboard.jsx     — Tutors, groups, AI grouping
+│   ├── components/
+│   │   ├── GroupChat.jsx          — Real-time chat component
+│   │   └── NovaAvatar.jsx         — Three.js avatar
+│   ├── hooks/
+│   │   ├── useAuth.jsx            — Auth state + AuthProvider
+│   │   ├── useGroup.js            — Group data fetching
+│   │   └── useChat.js             — Real-time chat hook
+│   └── lib/
+│       └── supabase.js            — Supabase client
+├── server/src/
+│   ├── index.js                   — Express server
+│   ├── middleware/auth.js         — JWT verification
+│   └── routes/
+│       ├── nova.js                — Prof Nova (Groq)
+│       ├── grouping.js            — AI grouping (Groq)
+│       ├── tutor.js               — Tutor actions
+│       └── admin.js               — Admin actions
+└── supabase/migrations/
+    └── 001_initial_schema.sql     — Full DB schema
+```
+
+---
+
+## Phase 3 — coming next
+- Supabase Storage for file uploads
+- Reading schedule generator
+- Classroom mode (group Nova sessions)
+- Student progress tracking charts
+- Professor Nova personality document (full character brief)

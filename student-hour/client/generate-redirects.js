@@ -1,12 +1,6 @@
-// This runs at build time to bake VITE_API_URL into _redirects
-import { writeFileSync } from 'fs'
-
+import { writeFileSync, mkdirSync } from 'fs'
 const apiUrl = process.env.VITE_API_URL
-if (!apiUrl) {
-  console.warn('WARNING: VITE_API_URL not set — API calls will fail on Netlify')
-  process.exit(0)
-}
-
-const content = `/api/*  ${apiUrl}/api/:splat  200\n/*  /index.html  200\n`
-writeFileSync('public/_redirects', content)
-console.log('Generated _redirects with API URL:', apiUrl)
+if (!apiUrl) { console.warn('VITE_API_URL not set - API calls will fail'); process.exit(0) }
+mkdirSync('public', { recursive: true })
+writeFileSync('public/_redirects', `/api/*  ${apiUrl}/api/:splat  200\n/*  /index.html  200\n`)
+console.log('_redirects generated with:', apiUrl)

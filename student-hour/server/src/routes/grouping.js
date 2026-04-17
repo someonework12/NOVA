@@ -51,13 +51,8 @@ Respond ONLY with valid JSON, no explanation, no markdown, just the raw JSON:
       max_tokens: 1024
     })
 
-    let raw = completion.choices[0].message.content.trim()
-    // Strip markdown code fences if present
-    raw = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim()
-    // Extract first JSON object if there's surrounding text
-    const jsonMatch = raw.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) throw new Error('Groq did not return valid JSON for grouping')
-    const { groups } = JSON.parse(jsonMatch[0])
+    const raw = completion.choices[0].message.content.replace(/```json|```/g, '').trim()
+    const { groups } = JSON.parse(raw)
 
     let totalGrouped = 0
     for (const group of groups) {
