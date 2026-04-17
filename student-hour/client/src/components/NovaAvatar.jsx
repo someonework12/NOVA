@@ -1,130 +1,52 @@
-import { useEffect, useRef } from 'react'
-
 export default function NovaAvatar({ state = 'idle' }) {
-  const mountRef = useRef(null)
-  const stateRef = useRef(state)
-
-  useEffect(() => { stateRef.current = state }, [state])
-
-  useEffect(() => {
-    const el = mountRef.current
-    if (!el) return
-
-    let THREE, renderer, scene, camera, mixer, clock, frameId, avatar
-    let bobOffset = 0
-
-    async function init() {
-      THREE = await import('three')
-      const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js').catch(() => ({ GLTFLoader: null }))
-
-      const W = el.clientWidth || 400
-      const H = el.clientHeight || 480
-
-      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
-      renderer.setSize(W, H)
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-      el.appendChild(renderer.domElement)
-
-      scene = new THREE.Scene()
-      camera = new THREE.PerspectiveCamera(40, W / H, 0.1, 100)
-      camera.position.set(0, 1.4, 2.2)
-      camera.lookAt(0, 1.2, 0)
-
-      scene.add(new THREE.AmbientLight(0xfff5e0, 1.2))
-      const key = new THREE.DirectionalLight(0xfff0cc, 1.4)
-      key.position.set(1, 3, 2); scene.add(key)
-      const fill = new THREE.DirectionalLight(0xffe8a0, 0.4)
-      fill.position.set(-2, 1, 1); scene.add(fill)
-
-      clock = new THREE.Clock()
-
-      // Try loading Ready Player Me avatar
-      if (GLTFLoader) {
-        const loader = new GLTFLoader()
-        loader.load(
-          'https://models.readyplayer.me/6409f2b4bb2aff0001a54e7a.glb',
-          gltf => {
-            avatar = gltf.scene
-            avatar.position.set(0, -0.9, 0)
-            scene.add(avatar)
-            if (gltf.animations?.length) {
-              mixer = new THREE.AnimationMixer(avatar)
-              mixer.clipAction(gltf.animations[0]).play()
-            }
-          },
-          undefined,
-          () => buildFallback(THREE, scene)
-        )
-      } else {
-        buildFallback(THREE, scene)
-      }
-
-      function animate() {
-        frameId = requestAnimationFrame(animate)
-        const delta = clock.getDelta()
-        if (mixer) mixer.update(delta)
-        bobOffset += delta
-        if (avatar) {
-          avatar.position.y = -0.9 + Math.sin(bobOffset * 1.2) * 0.012
-          const s = stateRef.current
-          if (s === 'thinking') {
-            avatar.rotation.y += 0.007
-          } else if (s === 'speaking') {
-            avatar.rotation.x = Math.sin(bobOffset * 5) * 0.035
-          } else {
-            avatar.rotation.x *= 0.88
-          }
-        }
-        renderer.render(scene, camera)
-      }
-      animate()
-    }
-
-    function buildFallback(THREE, scene) {
-      // Stylised Nova fallback — golden sphere with ring
-      const group = new THREE.Group()
-      const head = new THREE.Mesh(new THREE.SphereGeometry(0.38, 32, 32), new THREE.MeshStandardMaterial({ color: 0xf5c842 }))
-      head.position.set(0, 1.2, 0)
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.52, 0.04, 16, 64), new THREE.MeshStandardMaterial({ color: 0x7a3d14 }))
-      ring.position.set(0, 1.2, 0); ring.rotation.x = Math.PI / 2
-      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.26, 0.7, 32), new THREE.MeshStandardMaterial({ color: 0x5c2e10 }))
-      body.position.set(0, 0.62, 0)
-      group.add(head, ring, body)
-      scene.add(group)
-      avatar = group
-    }
-
-    init()
-
-    return () => {
-      cancelAnimationFrame(frameId)
-      if (renderer) { renderer.dispose(); if (el.contains(renderer.domElement)) el.removeChild(renderer.domElement) }
-    }
-  }, [])
-
+  const thinking = state === 'thinking'
+  const speaking = state === 'speaking'
   return (
-    <div style={{ position: 'relative', width: '100%', maxWidth: 360, aspectRatio: '3/4' }}>
-      {/* Glow ring */}
-      <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-        <div style={{
-          width: 260, height: 260, borderRadius: '50%',
-          background: state === 'speaking'
-            ? 'radial-gradient(circle,rgba(245,200,66,0.2) 0%,transparent 70%)'
-            : state === 'thinking'
-            ? 'radial-gradient(circle,rgba(139,94,60,0.25) 0%,transparent 70%)'
-            : 'radial-gradient(circle,rgba(245,200,66,0.07) 0%,transparent 70%)',
-          transition: 'background 1s'
-        }} />
+    <div style={{ position:'relative', width:'100%', maxWidth:260, aspectRatio:'1/1', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto' }}>
+      <style>{`
+        @keyframes npulse{0%,100%{opacity:1}50%{opacity:.2}}
+        @keyframes nspin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+        @keyframes nbob{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+        @keyframes nmouth{0%,100%{height:5px}50%{height:14px}}
+      `}</style>
+      {/* Glow */}
+      <div style={{ position:'absolute', width:'100%', height:'100%', borderRadius:'50%',
+        background: speaking ? 'radial-gradient(circle,rgba(245,200,66,0.3) 0%,transparent 70%)'
+          : thinking ? 'radial-gradient(circle,rgba(255,255,255,0.1) 0%,transparent 70%)'
+          : 'radial-gradient(circle,rgba(245,200,66,0.08) 0%,transparent 70%)',
+        transition:'background 1s', animation: state!=='idle' ? 'npulse 2s ease-in-out infinite' : 'none'
+      }}/>
+      {/* Spinning orbit ring when thinking */}
+      {thinking && <div style={{ position:'absolute', width:'90%', height:'90%', borderRadius:'50%', border:'2px dashed rgba(245,200,66,0.5)', animation:'nspin 2.5s linear infinite' }}/>}
+      {/* Head */}
+      <div style={{ width:'65%', height:'65%', animation:'nbob 3.5s ease-in-out infinite', position:'relative', display:'flex', alignItems:'center', justifyContent:'center' }}>
+        <div style={{ width:'100%', height:'100%', borderRadius:'50%',
+          background:'linear-gradient(135deg,#F5C842,#c88a00)',
+          boxShadow: speaking ? '0 0 40px rgba(245,200,66,0.7),0 8px 32px rgba(0,0,0,0.4)' : '0 8px 32px rgba(0,0,0,0.35)',
+          transition:'box-shadow 0.6s',
+          display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:10
+        }}>
+          <div style={{ fontFamily:'Georgia,serif', fontWeight:800, fontSize:56, color:'#3B1F0E', lineHeight:1, userSelect:'none', letterSpacing:'-2px' }}>N</div>
+          {/* Animated mouth */}
+          <div style={{ width:24, borderRadius:4, background:'rgba(58,31,14,0.55)',
+            height: speaking ? 14 : 5,
+            animation: speaking ? 'nmouth 0.35s ease-in-out infinite' : 'none',
+            transition:'height 0.3s'
+          }}/>
+        </div>
+        {/* Live dot */}
+        {speaking && <div style={{ position:'absolute', top:'8%', right:'8%', width:13, height:13, borderRadius:'50%', background:'#22c55e', boxShadow:'0 0 8px #22c55e', animation:'npulse 0.9s ease-in-out infinite' }}/>}
       </div>
-      <div ref={mountRef} style={{ width: '100%', height: '100%', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }} />
-      {/* State pill */}
-      <div style={{ position: 'absolute', bottom: 14, left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)', borderRadius: 'var(--radius-full)', padding: '5px 13px', display: 'flex', alignItems: 'center', gap: 7 }}>
-        <div style={{ width: 7, height: 7, borderRadius: '50%', background: state === 'speaking' ? '#22c55e' : state === 'thinking' ? 'var(--yellow-400)' : 'rgba(255,255,255,0.3)', transition: 'background 0.3s', animation: state !== 'idle' ? 'npulse 1.5s ease-in-out infinite' : 'none' }} />
-        <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-          {state === 'thinking' ? 'Thinking' : state === 'speaking' ? 'Speaking' : 'Nova'}
+      {/* Status pill */}
+      <div style={{ position:'absolute', bottom:0, left:'50%', transform:'translateX(-50%)', background:'rgba(0,0,0,0.6)', backdropFilter:'blur(10px)', borderRadius:999, padding:'5px 14px', display:'flex', alignItems:'center', gap:7, whiteSpace:'nowrap' }}>
+        <div style={{ width:7, height:7, borderRadius:'50%', transition:'background 0.3s',
+          background: speaking ? '#22c55e' : thinking ? '#F5C842' : 'rgba(255,255,255,0.25)',
+          animation: state!=='idle' ? 'npulse 1.5s ease-in-out infinite' : 'none'
+        }}/>
+        <span style={{ fontSize:10, color:'rgba(255,255,255,0.65)', textTransform:'uppercase', letterSpacing:'0.07em' }}>
+          {speaking ? 'Speaking' : thinking ? 'Thinking' : 'Professor Nova'}
         </span>
       </div>
-      <style>{`@keyframes npulse{0%,100%{opacity:1}50%{opacity:.3}}`}</style>
     </div>
   )
 }
