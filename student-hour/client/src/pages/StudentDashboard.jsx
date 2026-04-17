@@ -10,19 +10,20 @@ const API = () => import.meta.env.VITE_API_URL || ''
 async function apiFetch(path, method='GET', body) {
   const { data: { session } } = await supabase.auth.getSession()
   const res = await fetch(`${API()}${path}`, {
-    method,
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+    method, headers:{ 'Content-Type':'application/json', Authorization:`Bearer ${session.access_token}` },
     body: body ? JSON.stringify(body) : undefined
   })
-  if (!res.ok) { const e = await res.json().catch(()=>{}); throw new Error(e?.error || 'Request failed') }
-  return res.json()
+  const data = await res.json()
+  if (!res.ok) throw new Error(data?.error || 'Request failed')
+  return data
 }
 
 function Sidebar({ active, setActive, firstName, signOut, group, onClose }) {
   const items = [
-    { id:'chat', label:'Group Chat', icon:'💬' },
-    { id:'tasks', label:'My Tasks', icon:'✅' },
-    { id:'resources', label:'Resources', icon:'📚' },
+    { id:'chat',     label:'Group Chat',     icon:'💬' },
+    { id:'courses',  label:'My Courses',     icon:'📖' },
+    { id:'tasks',    label:'My Tasks',       icon:'✅' },
+    { id:'resources',label:'Resources',      icon:'📚' },
     { id:'schedule', label:'Study Schedule', icon:'📅' },
   ]
   return (
@@ -51,12 +52,7 @@ function Sidebar({ active, setActive, firstName, signOut, group, onClose }) {
           </button>
         ))}
         <div style={{ margin:'10px 0', borderTop:'1px solid rgba(255,255,255,0.08)', paddingTop:10 }}>
-          <Link to="/dashboard/nova" onClick={onClose} style={{
-            display:'flex', alignItems:'center', gap:10, padding:'11px 12px',
-            borderRadius:'var(--radius-md)', fontSize:14,
-            background:'rgba(245,200,66,0.1)', color:'var(--yellow-300)',
-            border:'1px solid rgba(245,200,66,0.2)', textDecoration:'none'
-          }}>
+          <Link to="/dashboard/nova" onClick={onClose} style={{ display:'flex', alignItems:'center', gap:10, padding:'11px 12px', borderRadius:'var(--radius-md)', fontSize:14, background:'rgba(245,200,66,0.1)', color:'var(--yellow-300)', border:'1px solid rgba(245,200,66,0.2)', textDecoration:'none' }}>
             <span style={{ fontSize:15 }}>✦</span> Professor Nova
           </Link>
         </div>
@@ -74,44 +70,152 @@ export default function StudentDashboard() {
   const [active, setActive] = useState('chat')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const firstName = profile?.full_name?.split(' ')[0] || 'Student'
-  const titles = { chat: group?.name || 'Group Chat', tasks:'My Tasks', resources:'Resources', schedule:'Study Schedule' }
+  const titles = { chat: group?.name||'Group Chat', courses:'My Courses', tasks:'My Tasks', resources:'Resources', schedule:'Study Schedule' }
 
   return (
     <div className="app-shell">
-      <div className={`sidebar-overlay ${sidebarOpen ? 'open' : ''}`} onClick={() => setSidebarOpen(false)} />
-      <aside className={`app-sidebar ${sidebarOpen ? 'open' : ''}`} style={{ background:'var(--brown-900)' }}>
-        <Sidebar active={active} setActive={setActive} firstName={firstName} signOut={signOut} group={group} onClose={() => setSidebarOpen(false)} />
+      <div className={`sidebar-overlay ${sidebarOpen?'open':''}`} onClick={()=>setSidebarOpen(false)} />
+      <aside className={`app-sidebar ${sidebarOpen?'open':''}`} style={{ background:'var(--brown-900)' }}>
+        <Sidebar active={active} setActive={setActive} firstName={firstName} signOut={signOut} group={group} onClose={()=>setSidebarOpen(false)} />
       </aside>
       <main className="app-main">
         <div style={{ padding:'13px 18px', borderBottom:'1px solid var(--border-soft)', display:'flex', alignItems:'center', justifyContent:'space-between', background:'#fff', flexShrink:0 }}>
           <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-            <button className="hamburger" onClick={() => setSidebarOpen(true)} aria-label="Menu"><span /><span /><span /></button>
+            <button className="hamburger" onClick={()=>setSidebarOpen(true)} aria-label="Menu"><span/><span/><span/></button>
             <span style={{ fontWeight:600, fontSize:15, color:'var(--brown-900)' }}>{titles[active]}</span>
             {active==='chat' && group && <span style={{ fontSize:11, color:'var(--text-muted)' }}>{members.length} members</span>}
           </div>
           {group?.focus && <span className="badge badge-yellow" style={{ fontSize:11, maxWidth:140, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{group.focus}</span>}
         </div>
         <div style={{ flex:1, overflow:'hidden' }}>
-          {active==='chat' && <GroupChat groupId={profile?.group_id} groupName={group?.name} />}
-          {active==='tasks' && <TasksView groupId={profile?.group_id} />}
+          {active==='chat'      && <GroupChat groupId={profile?.group_id} groupName={group?.name} />}
+          {active==='courses'   && <CoursesView studentId={profile?.id} />}
+          {active==='tasks'     && <TasksView groupId={profile?.group_id} />}
           {active==='resources' && <ResourcesView groupId={profile?.group_id} />}
-          {active==='schedule' && <ScheduleView />}
+          {active==='schedule'  && <ScheduleView />}
         </div>
       </main>
     </div>
   )
 }
 
+// ── Courses view — add/edit/remove courses ──────────────────────
+function CoursesView({ studentId }) {
+  const [courses, setCourses] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [showAdd, setShowAdd] = useState(false)
+  const [form, setForm] = useState({ code:'', title:'', weakness:'' })
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  useEffect(() => {
+    if (!studentId) return
+    supabase.from('student_courses').select('*').eq('student_id', studentId).order('created_at')
+      .then(({ data }) => { setCourses(data||[]); setLoading(false) })
+  }, [studentId])
+
+  async function addCourse(e) {
+    e.preventDefault()
+    if (!form.code.trim() || !form.title.trim()) return
+    setSaving(true); setMsg('')
+    const { data, error } = await supabase.from('student_courses').insert({
+      student_id: studentId,
+      course_code: form.code.trim().toUpperCase(),
+      course_title: form.title.trim(),
+      weakness_description: form.weakness.trim()
+    }).select().single()
+    if (error) { setMsg('Error: ' + error.message) }
+    else { setCourses(p => [...p, data]); setForm({ code:'', title:'', weakness:'' }); setShowAdd(false); setMsg('Course added!') }
+    setSaving(false)
+  }
+
+  async function removeCourse(id) {
+    if (!confirm('Remove this course?')) return
+    await supabase.from('student_courses').delete().eq('id', id)
+    setCourses(p => p.filter(c => c.id !== id))
+  }
+
+  if (loading) return <div style={{ padding:'28px 20px', color:'var(--text-muted)', fontSize:14 }}>Loading courses...</div>
+
+  return (
+    <div style={{ padding:'20px 18px', overflowY:'auto', height:'100%' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16, flexWrap:'wrap', gap:10 }}>
+        <p style={{ fontSize:13, color:'var(--text-secondary)' }}>
+          These are the courses Professor Nova knows about. Keep them updated so Nova can help you effectively.
+        </p>
+        <button onClick={()=>setShowAdd(v=>!v)} className="btn-accent" style={{ padding:'8px 16px', fontSize:13 }}>
+          {showAdd ? '× Cancel' : '+ Add course'}
+        </button>
+      </div>
+
+      {msg && <div style={{ fontSize:13, color: msg.startsWith('Error') ? '#c0392b' : 'var(--brown-600)', marginBottom:12, padding:'8px 12px', background: msg.startsWith('Error') ? '#fef2f2' : 'var(--yellow-50)', borderRadius:8 }}>{msg}</div>}
+
+      {showAdd && (
+        <form onSubmit={addCourse} style={{ background:'var(--surface-2)', border:'1px solid var(--border-soft)', borderRadius:'var(--radius-lg)', padding:16, marginBottom:16, display:'flex', flexDirection:'column', gap:12 }}>
+          <h3 style={{ fontSize:14, fontWeight:600, color:'var(--brown-900)' }}>Add a new course</h3>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px,1fr))', gap:10 }}>
+            <div>
+              <label className="label">Course code</label>
+              <input className="input-field" placeholder="e.g. MTH301" value={form.code}
+                onChange={e=>setForm({...form, code:e.target.value})} required />
+            </div>
+            <div>
+              <label className="label">Course title</label>
+              <input className="input-field" placeholder="e.g. Real Analysis" value={form.title}
+                onChange={e=>setForm({...form, title:e.target.value})} required />
+            </div>
+          </div>
+          <div>
+            <label className="label">What are you struggling with?</label>
+            <input className="input-field" placeholder="e.g. Integration techniques, proofs..." value={form.weakness}
+              onChange={e=>setForm({...form, weakness:e.target.value})} />
+          </div>
+          <button type="submit" className="btn-primary" style={{ width:'100%', padding:11 }} disabled={saving}>
+            {saving ? 'Adding...' : 'Add course'}
+          </button>
+        </form>
+      )}
+
+      {courses.length === 0 ? (
+        <div style={{ background:'var(--yellow-50)', border:'1px solid var(--yellow-300)', borderRadius:'var(--radius-lg)', padding:'20px', textAlign:'center' }}>
+          <div style={{ fontWeight:600, fontSize:14, color:'var(--brown-900)', marginBottom:8 }}>No courses yet</div>
+          <p style={{ fontSize:13, color:'var(--text-secondary)' }}>Add the courses you're struggling with so Professor Nova knows exactly how to help you.</p>
+        </div>
+      ) : (
+        courses.map(c => (
+          <div key={c.id} className="card" style={{ marginBottom:10, padding:'14px 16px' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8 }}>
+              <div style={{ flex:1 }}>
+                <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:4 }}>
+                  <span className="badge badge-yellow" style={{ fontSize:11 }}>{c.course_code}</span>
+                  <span style={{ fontWeight:600, fontSize:14, color:'var(--brown-900)' }}>{c.course_title}</span>
+                </div>
+                {c.weakness_description && (
+                  <div style={{ fontSize:12, color:'var(--text-muted)' }}>
+                    Struggling with: {c.weakness_description}
+                  </div>
+                )}
+              </div>
+              <button onClick={()=>removeCourse(c.id)} style={{ background:'none', border:'none', color:'var(--text-muted)', cursor:'pointer', fontSize:18, lineHeight:1, padding:'0 4px', flexShrink:0 }} title="Remove course">×</button>
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  )
+}
+
+// ── Tasks view ──────────────────────────────────────────────────
 function TasksView({ groupId }) {
   const [tasks, setTasks] = useState([])
   useEffect(() => {
     if (!groupId) return
-    supabase.from('tasks').select('*').eq('group_id', groupId).order('due_date').then(({ data }) => setTasks(data || []))
+    supabase.from('tasks').select('*').eq('group_id', groupId).order('due_date').then(({ data }) => setTasks(data||[]))
   }, [groupId])
   if (!groupId) return <Empty text="You haven't been assigned to a group yet." />
   return (
     <div style={{ padding:'20px 18px', overflowY:'auto', height:'100%' }}>
-      {tasks.length===0 ? <Empty text="No tasks assigned yet. Your tutor will add them here." />
+      {tasks.length===0 ? <Empty text="No tasks yet. Your tutor will assign them here." />
       : tasks.map(t => (
         <div key={t.id} className="card" style={{ marginBottom:12 }}>
           <div style={{ fontWeight:600, fontSize:14, color:'var(--brown-900)', marginBottom:6 }}>{t.title}</div>
@@ -123,11 +227,12 @@ function TasksView({ groupId }) {
   )
 }
 
+// ── Resources view ──────────────────────────────────────────────
 function ResourcesView({ groupId }) {
   const [resources, setResources] = useState([])
   useEffect(() => {
     if (!groupId) return
-    supabase.from('group_resources').select('*').eq('group_id', groupId).order('created_at', { ascending:false }).then(({ data }) => setResources(data || []))
+    supabase.from('group_resources').select('*').eq('group_id', groupId).order('created_at',{ascending:false}).then(({ data }) => setResources(data||[]))
   }, [groupId])
   if (!groupId) return <Empty text="You haven't been assigned to a group yet." />
   return (
@@ -147,6 +252,7 @@ function ResourcesView({ groupId }) {
   )
 }
 
+// ── Schedule view ───────────────────────────────────────────────
 function ScheduleView() {
   const [schedule, setSchedule] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -154,17 +260,13 @@ function ScheduleView() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    apiFetch('/api/schedule/my-schedule')
-      .then(d => { setSchedule(d.schedule); setLoading(false) })
-      .catch(() => setLoading(false))
+    apiFetch('/api/schedule/my-schedule').then(d=>{ setSchedule(d.schedule); setLoading(false) }).catch(()=>setLoading(false))
   }, [])
 
   async function generate() {
     setGenerating(true); setError('')
-    try {
-      const d = await apiFetch('/api/schedule/generate', 'POST', { weeksAhead: 1 })
-      setSchedule(d.schedule)
-    } catch(e) { setError(e.message) }
+    try { const d = await apiFetch('/api/schedule/generate','POST',{weeksAhead:1}); setSchedule(d.schedule) }
+    catch(e) { setError(e.message) }
     setGenerating(false)
   }
 
@@ -172,7 +274,7 @@ function ScheduleView() {
 
   return (
     <div style={{ padding:'20px 18px', overflowY:'auto', height:'100%' }}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:18, flexWrap:'wrap', gap:10 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16, flexWrap:'wrap', gap:10 }}>
         <p style={{ fontSize:13, color:'var(--text-secondary)' }}>Your personalised 7-day study plan based on your courses and deadlines.</p>
         <button onClick={generate} className="btn-accent" style={{ padding:'9px 16px', fontSize:13 }} disabled={generating}>
           {generating ? 'Generating...' : schedule ? '↻ Regenerate' : 'Generate schedule'}
@@ -180,17 +282,17 @@ function ScheduleView() {
       </div>
       {error && <div style={{ background:'#fef2f2', border:'1px solid #fca5a5', borderRadius:8, padding:'10px 14px', fontSize:13, color:'#c0392b', marginBottom:14 }}>{error}</div>}
       {!schedule ? (
-        <div style={{ background:'var(--yellow-50)', border:'1px solid var(--yellow-300)', borderRadius:'var(--radius-lg)', padding:'20px 18px', textAlign:'center' }}>
-          <div style={{ fontWeight:600, fontSize:15, color:'var(--brown-900)', marginBottom:8 }}>No schedule yet</div>
-          <p style={{ fontSize:14, color:'var(--text-secondary)' }}>Click "Generate schedule" — Nova will build your personal study plan.</p>
+        <div style={{ background:'var(--yellow-50)', border:'1px solid var(--yellow-300)', borderRadius:'var(--radius-lg)', padding:'20px', textAlign:'center' }}>
+          <div style={{ fontWeight:600, fontSize:14, color:'var(--brown-900)', marginBottom:8 }}>No schedule yet</div>
+          <p style={{ fontSize:13, color:'var(--text-secondary)' }}>Click "Generate schedule" — Nova will build your personal study plan from your courses.</p>
         </div>
-      ) : schedule.map((day, i) => (
+      ) : schedule.map((day,i) => (
         <div key={i} className="card" style={{ marginBottom:12 }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
             <div style={{ fontWeight:600, fontSize:14, color:'var(--brown-900)' }}>{day.date}</div>
             {day.total_hours && <span className="badge badge-yellow">{day.total_hours}h</span>}
           </div>
-          {day.sessions?.map((s, j) => (
+          {day.sessions?.map((s,j) => (
             <div key={j} style={{ borderLeft:'3px solid var(--yellow-500)', paddingLeft:12, marginBottom: j<day.sessions.length-1?12:0 }}>
               <div style={{ display:'flex', justifyContent:'space-between', gap:8, marginBottom:3 }}>
                 <div style={{ fontWeight:500, fontSize:13, color:'var(--brown-800)' }}>{s.course_code} — {s.topic}</div>

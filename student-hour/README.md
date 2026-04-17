@@ -1,78 +1,44 @@
-# The Student Hour — Phase 5
+# The Student Hour — Phase 6
 
-## Unzip command (copy this exactly)
-
+## Unzip command
 ```bash
-cd /workspaces/NOVA/student-hour && unzip -o ~/Downloads/student-hour-phase5.zip
+cd /workspaces/NOVA/student-hour && unzip -o ~/Downloads/student-hour-phase6.zip
 ```
 
-That's it. The zip extracts directly into your repo. Then:
-
+Then push:
 ```bash
-git add -A && git commit -m "Phase 5" && git push
+git add -A && git commit -m "Phase 6 - voice + course management" && git push
 ```
 
-Netlify auto-deploys. Done.
+## What was fixed
 
----
+### 1. Nova 500 error — FIXED
+Groq SDK was on version 0.3.3 which is outdated. Upgraded to 0.9.0.
+Also added a proper error message when GROQ_API_KEY is missing.
 
-## Environment variables — set these ONCE in Netlify
+### 2. THREE is not defined — FIXED
+Removed Three.js entirely. NovaAvatar is now pure CSS animation — 
+no external deps, no errors, works on all browsers.
 
-Go to: Netlify → your site → Site configuration → Environment variables
+### 3. Nova voice — ADDED
+Professor Nova now speaks out loud using the browser's built-in 
+Web Speech API (free, no API key needed).
+- Nova reads every response aloud automatically
+- Students can speak to Nova using the microphone button
+- Voice can be toggled on/off
+- Each message has a "Replay" button to hear it again
+- Works in Chrome, Edge, Safari (not Firefox)
 
-| Variable | Value |
-|---|---|
-| `VITE_SUPABASE_URL` | `https://xxxx.supabase.co` |
-| `VITE_SUPABASE_ANON_KEY` | your anon key |
-| `VITE_API_URL` | `https://your-render-app.onrender.com` (NO trailing slash) |
+### 4. My Courses tab — ADDED
+Students now have a "My Courses" tab in their dashboard where they can:
+- See all courses they added during onboarding
+- Add new courses at any time (code + title + weakness description)
+- Remove courses they no longer need help with
+Nova automatically reads these when teaching
 
----
+## Render — make sure GROQ_API_KEY is set
+Go to Render → your service → Environment
+GROQ_API_KEY = your key from console.groq.com
 
-## Environment variables — set these in Render
-
-Go to: Render → your service → Environment
-
-| Variable | Value |
-|---|---|
-| `SUPABASE_URL` | `https://xxxx.supabase.co` |
-| `SUPABASE_SERVICE_ROLE_KEY` | your service role key |
-| `GROQ_API_KEY` | from console.groq.com (free) |
-| `CLIENT_URL` | `https://your-site.netlify.app` |
-
----
-
-## Supabase — run this SQL patch if you haven't yet
-
-Copy the contents of `supabase/migrations/002_phase5_patch.sql` and run in Supabase SQL Editor.
-
----
-
-## How everything works now
-
-### Tutor login flow
-1. Admin dashboard → Manage Tutors → enter name + email → Generate
-2. Credentials appear on screen with a "Copy" button — email + password clearly shown
-3. Send them to the tutor (WhatsApp, email, etc.)
-4. Tutor goes to `/login` on your site and signs in
-5. They land directly on their Tutor Dashboard
-
-### Student flow
-1. Sign up → onboarding form (courses + weaknesses) → dashboard
-2. Admin runs AI grouping → student gets a group
-3. Student chats with group, uses Professor Nova personal + classroom mode
-4. Nova remembers every session and builds on it
-
-### Professor Nova
-- Full personality consciousness document injected every session
-- Personal mode: knows your name, courses, history
-- Classroom mode: teaches the whole group without exposing individuals
-- Suggestion buttons to get started fast
-- Session counter so Nova knows how many times you've met
-
-## What changed in Phase 5
-- Landing page shows "Go to dashboard" for logged-in users
-- Admin dashboard has clear credential display + copy button
-- Students list panel in admin
-- Nova has a complete personality + teaching principles document
-- SQL patch file for easy Supabase setup
-- .gitignore cleaned up — no more package-lock.json in git
+## Voice works in: Chrome, Edge, Safari
+## Voice does NOT work in: Firefox (Firefox doesn't support Web Speech API)
