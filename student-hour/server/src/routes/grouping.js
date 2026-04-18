@@ -27,7 +27,7 @@ router.post('/run', requireRole('admin'), async (req, res) => {
     }))
 
     const completion = await groq.chat.completions.create({
-      model: 'llama3-8b-8192',
+      model: 'llama-3.3-70b-versatile',
       messages: [{
         role: 'user',
         content: `You are an academic grouping engine. Group these students into cohorts of 3-5 based on shared course codes and similar weaknesses. Students in the same group should share at least one course code.

@@ -12,7 +12,7 @@ try {
   console.error('Groq init failed:', e.message)
 }
 
-const MODEL = 'llama3-8b-8192'
+const MODEL = 'llama-3.3-70b-versatile'
 
 function buildConsciousness(profile, courses, memory, resources) {
   const firstName = profile?.full_name?.split(' ')[0] || 'there'
