@@ -17,7 +17,7 @@ function speakText(text, onEnd) {
   window.speechSynthesis.speak(utt)
 }
 
-const API = () => import.meta.env.VITE_API_URL || ''
+const API = () => ''
 
 export default function ProfessorNovaPage() {
   const { profile } = useAuth()
