@@ -12,7 +12,7 @@ try {
   console.error('Groq init failed:', e.message)
 }
 
-const MODEL = 'llama-3.3-70b-versatile'
+const MODEL = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile'
 
 function buildConsciousness(profile, courses, memory, resources) {
   const firstName = profile?.full_name?.split(' ')[0] || 'there'
