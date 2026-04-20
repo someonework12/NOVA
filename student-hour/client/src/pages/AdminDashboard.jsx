@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { supabase } from '../lib/supabase.js'
 
-const apiBase = ''
+const apiBase = import.meta.env.VITE_API_URL || ''
 
 async function apiFetch(path, method = 'GET', body) {
   const { data: { session } } = await supabase.auth.getSession()

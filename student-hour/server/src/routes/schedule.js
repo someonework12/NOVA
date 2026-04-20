@@ -29,7 +29,7 @@ router.post('/generate', async (req, res) => {
     })
 
     const completion = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
+      model: 'llama3-70b-8192',
       messages: [{
         role: 'user',
         content: `You are an academic study planner. Generate a realistic ${weeksAhead}-week daily reading schedule for this student.

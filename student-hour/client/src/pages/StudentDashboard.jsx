@@ -5,7 +5,7 @@ import { useGroup } from '../hooks/useGroup.js'
 import { supabase } from '../lib/supabase.js'
 import GroupChat from '../components/GroupChat.jsx'
 
-const API = () => ''
+const API = () => import.meta.env.VITE_API_URL || ''
 async function apiFetch(path, method='GET', body) {
   const { data: { session } } = await supabase.auth.getSession()
   const res = await fetch(`${API()}${path}`, { method, headers:{'Content-Type':'application/json',Authorization:`Bearer ${session.access_token}`}, body:body?JSON.stringify(body):undefined })
