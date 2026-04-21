@@ -5,121 +5,281 @@ import { useGroup } from '../hooks/useGroup.js'
 import { supabase } from '../lib/supabase.js'
 import NovaAvatar from '../components/NovaAvatar.jsx'
 
-// ── VOICE SYNTHESIS ───────────────────────────────────────────────
-function getDeepVoice() {
+// ═══════════════════════════════════════════════════
+// PERSISTENT SPEECH ENGINE
+// The core problem: Web Speech API stops after ~60s
+// or after silence. This engine never stops — it
+// restarts itself immediately every time it ends.
+// ═══════════════════════════════════════════════════
+class SpeechEngine {
+  constructor(onSpeech, onStateChange) {
+    this.onSpeech = onSpeech
+    this.onStateChange = onStateChange
+    this.active = false
+    this.blocked = false // blocked while Nova is speaking/thinking
+    this.rec = null
+    this.restartTimer = null
+    this.silenceTimer = null
+    this.accumulated = ''
+    this.lastSpeechTime = 0
+  }
+
+  start() {
+    this.active = true
+    this._startRec()
+  }
+
+  stop() {
+    this.active = false
+    this._kill()
+    this.onStateChange('idle')
+  }
+
+  block() { this.blocked = true; this._kill() }
+  unblock() {
+    this.blocked = false
+    if (this.active) setTimeout(() => this._startRec(), 800)
+  }
+
+  _kill() {
+    clearTimeout(this.restartTimer)
+    clearTimeout(this.silenceTimer)
+    try { this.rec?.stop() } catch(_) {}
+    this.rec = null
+  }
+
+  _startRec() {
+    if (!this.active || this.blocked) return
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SR) return
+
+    this._kill()
+
+    const rec = new SR()
+    // CRITICAL SETTINGS for reliability:
+    rec.continuous = true        // don't stop after one sentence
+    rec.interimResults = true    // get words as they come in
+    rec.lang = 'en-US'
+    rec.maxAlternatives = 1
+
+    let finalTranscript = ''
+    let interimTranscript = ''
+
+    rec.onstart = () => {
+      this.onStateChange('listening')
+    }
+
+    rec.onresult = (e) => {
+      finalTranscript = ''
+      interimTranscript = ''
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) {
+          finalTranscript += e.results[i][0].transcript
+        } else {
+          interimTranscript += e.results[i][0].transcript
+        }
+      }
+
+      this.lastSpeechTime = Date.now()
+
+      // Send when we get a final result with substance
+      if (finalTranscript.trim().length > 2) {
+        const text = finalTranscript.trim()
+        finalTranscript = ''
+        this.onSpeech(text)
+      }
+    }
+
+    rec.onerror = (e) => {
+      // network and no-speech are normal — just restart
+      if (e.error === 'network' || e.error === 'no-speech' || e.error === 'audio-capture') {
+        if (this.active && !this.blocked) {
+          this.restartTimer = setTimeout(() => this._startRec(), 500)
+        }
+      }
+    }
+
+    rec.onend = () => {
+      // ALWAYS restart unless we're blocked or stopped
+      if (this.active && !this.blocked) {
+        this.restartTimer = setTimeout(() => this._startRec(), 300)
+      } else {
+        this.onStateChange('idle')
+      }
+    }
+
+    this.rec = rec
+    try {
+      rec.start()
+    } catch(e) {
+      // Already started — retry after delay
+      this.restartTimer = setTimeout(() => this._startRec(), 1000)
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════
+// TTS — deep professor voice
+// ═══════════════════════════════════════════════════
+function getVoice() {
   const voices = window.speechSynthesis?.getVoices() || []
-  // Prefer deep male voices in priority order
-  const preferred = [
-    'Google UK English Male', 'Microsoft David', 'Daniel',
-    'Alex', 'Fred', 'Microsoft Mark', 'Google US English'
-  ]
-  for (const name of preferred) {
+  const priority = ['Google UK English Male','Microsoft David Desktop','Daniel','Alex','Fred','Microsoft Mark']
+  for (const name of priority) {
     const v = voices.find(v => v.name.includes(name))
     if (v) return v
   }
-  // Fallback: first English voice
-  return voices.find(v => v.lang?.startsWith('en')) || voices[0]
+  return voices.find(v => v.lang?.startsWith('en') && !v.name.toLowerCase().includes('female') && !v.name.toLowerCase().includes('zira') && !v.name.toLowerCase().includes('hazel')) || voices.find(v => v.lang?.startsWith('en')) || null
 }
 
-function speakNova(text, onStart, onEnd) {
-  if (!window.speechSynthesis) { onEnd?.(); return null }
+function speakNova(text, onDone) {
+  if (!window.speechSynthesis) { onDone?.(); return }
   window.speechSynthesis.cancel()
   const utt = new SpeechSynthesisUtterance(text)
-  utt.rate = 0.82    // slower = deeper feel
-  utt.pitch = 0.75   // lower pitch = authoritative
-  utt.volume = 1
-  const voice = getDeepVoice()
+  utt.rate = 0.85; utt.pitch = 0.72; utt.volume = 1
+  const voice = getVoice()
   if (voice) utt.voice = voice
-  utt.onstart = onStart
-  utt.onend = onEnd
-  utt.onerror = onEnd
-  window.speechSynthesis.speak(utt)
-  return utt
-}
-
-// ── SPEECH RECOGNITION ────────────────────────────────────────────
-function createRecognizer({ onResult, onEnd, continuous = false, interimResults = false }) {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-  if (!SR) return null
-  const rec = new SR()
-  rec.continuous = continuous
-  rec.interimResults = interimResults
-  rec.lang = 'en-US'
-  // Maximise recognition quality
-  rec.maxAlternatives = 3
-  rec.onresult = e => {
-    // Pick the alternative with highest confidence
-    const results = Array.from(e.results)
-    const best = results
-      .flatMap(r => Array.from(r))
-      .sort((a, b) => b.confidence - a.confidence)[0]
-    if (best) onResult(best.transcript.trim())
+  utt.onend = onDone; utt.onerror = onDone
+  // Chrome bug: speech stops after ~15s. Split long text.
+  if (text.length > 200) {
+    const parts = text.match(/[^.!?]+[.!?]*/g) || [text]
+    let i = 0
+    function speakNext() {
+      if (i >= parts.length) { onDone?.(); return }
+      const u = new SpeechSynthesisUtterance(parts[i++])
+      u.rate = 0.85; u.pitch = 0.72; u.volume = 1
+      if (voice) u.voice = voice
+      u.onend = speakNext; u.onerror = speakNext
+      window.speechSynthesis.speak(u)
+    }
+    speakNext()
+    return
   }
-  rec.onend = onEnd
-  rec.onerror = (e) => { if (e.error !== 'no-speech') onEnd?.() }
-  return rec
+  window.speechSynthesis.speak(utt)
 }
 
+// ═══════════════════════════════════════════════════
+// FACE RECOGNITION (Phase 9)
+// Uses face-api.js for visual student recognition
+// ═══════════════════════════════════════════════════
+async function loadFaceAPI() {
+  if (window.faceapi) return window.faceapi
+  return new Promise((resolve) => {
+    const s = document.createElement('script')
+    s.src = 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js'
+    s.onload = async () => {
+      try {
+        await window.faceapi.nets.tinyFaceDetector.loadFromUri('https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model')
+        await window.faceapi.nets.faceRecognitionNet.loadFromUri('https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model')
+        await window.faceapi.nets.faceLandmark68Net.loadFromUri('https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model')
+      } catch(e) { /* models may not load in all environments */ }
+      resolve(window.faceapi)
+    }
+    s.onerror = () => resolve(null)
+    document.head.appendChild(s)
+  })
+}
+
+// ═══════════════════════════════════════════════════
+// MAIN COMPONENT
+// ═══════════════════════════════════════════════════
 export default function ProfessorNovaPage() {
   const { profile } = useAuth()
   const { group } = useGroup()
   const [mode, setMode] = useState('personal')
   const [messages, setMessages] = useState([])
+  const [novaState, setNovaState] = useState('idle')
+  const [boardText, setBoardText] = useState('')
+  const [boardVisible, setBoardVisible] = useState(false)
+  const [chatOpen, setChatOpen] = useState(false)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [novaState, setNovaState] = useState('idle')
   const [voiceOn, setVoiceOn] = useState(true)
-  const [autoListen, setAutoListen] = useState(false)
-  const [manualListening, setManualListening] = useState(false)
-  const [interimText, setInterimText] = useState('')
+  const [micOn, setMicOn] = useState(false)
   const [error, setError] = useState('')
-  const [showChat, setShowChat] = useState(true) // mobile: toggle between avatar and chat
-  const bottomRef = useRef(null)
-  const messagesRef = useRef([])
+  // Face recognition
+  const [faceActive, setFaceActive] = useState(false)
+  const [faceStatus, setFaceStatus] = useState('')
+  const videoRef = useRef(null)
+  const canvasRef = useRef(null)
+  const faceTimerRef = useRef(null)
+
+  const engineRef = useRef(null)
   const loadingRef = useRef(false)
-  const autoRecRef = useRef(null)
-  const manualRecRef = useRef(null)
-  const autoListenRef = useRef(false)
+  const messagesRef = useRef([])
+  const voiceOnRef = useRef(true)
+  const bottomRef = useRef(null)
 
   useEffect(() => { messagesRef.current = messages }, [messages])
   useEffect(() => { loadingRef.current = loading }, [loading])
+  useEffect(() => { voiceOnRef.current = voiceOn }, [voiceOn])
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
-  useEffect(() => { setMessages([]); setError('') }, [mode])
 
+  // Init speech engine on mount
   useEffect(() => {
-    // Load voices
     if (window.speechSynthesis) {
       window.speechSynthesis.getVoices()
       window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices()
     }
+
+    const engine = new SpeechEngine(
+      (text) => sendMessage(text),
+      (state) => {
+        if (state === 'listening') setNovaState('listening')
+        else if (!loadingRef.current) setNovaState('idle')
+      }
+    )
+    engineRef.current = engine
+
+    // Auto-start listening when page opens
+    setTimeout(() => {
+      if (engineRef.current) {
+        engineRef.current.start()
+        setMicOn(true)
+        // Nova greets the student
+        const name = profile?.full_name?.split(' ')[0] || 'there'
+        setTimeout(() => {
+          if (voiceOnRef.current) {
+            setNovaState('speaking')
+            engineRef.current?.block()
+            speakNova(
+              "Hello " + name + ", I'm Professor Nova. I'm listening — just speak to me anytime.",
+              () => {
+                setNovaState('idle')
+                engineRef.current?.unblock()
+              }
+            )
+          }
+        }, 800)
+      }
+    }, 1200)
+
     return () => {
+      engineRef.current?.stop()
       window.speechSynthesis?.cancel()
-      stopAutoListen()
-      stopManualListen()
+      stopFaceRecognition()
     }
   }, [])
 
-  // ── SEND TO NOVA ─────────────────────────────────────────────────
+  // ── SEND MESSAGE ──────────────────────────────────────────────
   const sendMessage = useCallback(async (text) => {
     const clean = text?.trim()
     if (!clean || loadingRef.current) return
 
+    engineRef.current?.block()
     const userMsg = { role: 'user', content: clean }
     const history = [...messagesRef.current, userMsg]
     setMessages(history)
     setInput('')
-    setInterimText('')
     setLoading(true)
     loadingRef.current = true
     setNovaState('thinking')
     setError('')
+    setBoardVisible(false)
 
     try {
       const { data: { session } } = await supabase.auth.getSession()
       const endpoint = mode === 'classroom' ? '/api/nova/classroom' : '/api/nova/chat'
-      const body = mode === 'classroom'
-        ? { messages: history, groupId: group?.id }
-        : { messages: history }
+      const body = mode === 'classroom' ? { messages: history, groupId: group?.id } : { messages: history }
 
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -129,332 +289,292 @@ export default function ProfessorNovaPage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `Error ${res.status}`)
 
-      setMessages(prev => [...prev, { role: 'assistant', content: data.reply }])
+      const reply = data.reply
+      setMessages(prev => [...prev, { role: 'assistant', content: reply }])
+      setBoardText(reply)
+      setBoardVisible(true)
 
-      if (voiceOn) {
+      if (voiceOnRef.current) {
         setNovaState('speaking')
-        speakNova(data.reply, null, () => {
+        speakNova(reply, () => {
           setNovaState('idle')
-          // Auto-restart listening after Nova finishes
-          if (autoListenRef.current) {
-            setTimeout(() => startAutoListen(), 600)
-          }
+          setBoardVisible(false)
+          engineRef.current?.unblock()
         })
       } else {
         setNovaState('idle')
-        if (autoListenRef.current) setTimeout(() => startAutoListen(), 300)
+        engineRef.current?.unblock()
       }
     } catch (err) {
       setError(err.message)
       setNovaState('idle')
+      engineRef.current?.unblock()
     } finally {
       setLoading(false)
       loadingRef.current = false
     }
-  }, [mode, group, voiceOn])
+  }, [mode, group])
 
-  // ── AUTO-LISTEN (always on) ───────────────────────────────────────
-  function startAutoListen() {
-    if (!autoListenRef.current) return
-    if (loadingRef.current || novaState === 'speaking') return
-
-    stopAutoListen()
-    const rec = createRecognizer({
-      continuous: false,
-      interimResults: true,
-      onResult: (transcript) => {
-        if (transcript.length > 2) {
-          stopAutoListen()
-          sendMessage(transcript)
-        }
-      },
-      onEnd: () => {
-        // Keep restarting while autoListen is on
-        if (autoListenRef.current && !loadingRef.current) {
-          setTimeout(() => startAutoListen(), 800)
-        }
-      }
-    })
-    if (!rec) return
-    autoRecRef.current = rec
-    setNovaState('awake')
-    try { rec.start() } catch (_) {}
-  }
-
-  function stopAutoListen() {
-    try { autoRecRef.current?.stop() } catch (_) {}
-    autoRecRef.current = null
-  }
-
-  function toggleAutoListen() {
-    if (autoListen) {
-      autoListenRef.current = false
-      setAutoListen(false)
-      stopAutoListen()
-      if (novaState === 'awake') setNovaState('idle')
+  function toggleMic() {
+    if (micOn) {
+      engineRef.current?.stop()
+      setMicOn(false)
+      setNovaState('idle')
     } else {
-      autoListenRef.current = true
-      setAutoListen(true)
-      // Nova speaks a greeting then starts listening
-      window.speechSynthesis?.cancel()
-      const firstName = profile?.full_name?.split(' ')[0] || 'there'
-      speakNova("I'm listening, " + firstName + ". Go ahead.", null, () => {
-        if (autoListenRef.current) startAutoListen()
-      })
+      engineRef.current?.start()
+      setMicOn(true)
     }
   }
 
-  // ── MANUAL MIC ────────────────────────────────────────────────────
-  function startManualListen() {
-    stopAutoListen()
-    window.speechSynthesis?.cancel()
+  // ── FACE RECOGNITION ─────────────────────────────────────────
+  async function startFaceRecognition() {
+    setFaceStatus('Loading face models...')
+    const faceapi = await loadFaceAPI()
+    if (!faceapi) { setFaceStatus('Face API unavailable'); return }
 
-    const rec = createRecognizer({
-      continuous: false,
-      interimResults: true,
-      onResult: (transcript) => {
-        setInput(transcript)
-        setInterimText('')
-        setManualListening(false)
-        manualRecRef.current = null
-        setTimeout(() => sendMessage(transcript), 300)
-      },
-      onEnd: () => { setManualListening(false); setInterimText('') }
-    })
-    if (!rec) { setError('Voice input needs Chrome or Edge.'); return }
-    manualRecRef.current = rec
-    setManualListening(true)
-    try { rec.start() } catch (_) { setManualListening(false) }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 320, height: 240 } })
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream
+        videoRef.current.play()
+      }
+      setFaceActive(true)
+      setFaceStatus('Camera active — looking for your face...')
+
+      faceTimerRef.current = setInterval(async () => {
+        if (!videoRef.current || !faceapi) return
+        try {
+          const detections = await faceapi.detectAllFaces(videoRef.current, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks()
+          if (detections.length > 0) {
+            setFaceStatus('Face detected! Nova recognizes you.')
+            const name = profile?.full_name?.split(' ')[0] || 'there'
+            if (voiceOnRef.current && novaState === 'idle') {
+              engineRef.current?.block()
+              setNovaState('speaking')
+              speakNova('I can see you, ' + name + '. Good to have you in class.', () => {
+                setNovaState('idle')
+                engineRef.current?.unblock()
+              })
+              clearInterval(faceTimerRef.current)
+            }
+          }
+        } catch(_) {}
+      }, 2000)
+    } catch (e) {
+      setFaceStatus('Camera permission denied')
+    }
   }
 
-  function stopManualListen() {
-    try { manualRecRef.current?.stop() } catch (_) {}
-    manualRecRef.current = null
-    setManualListening(false)
-    setInterimText('')
+  function stopFaceRecognition() {
+    clearInterval(faceTimerRef.current)
+    if (videoRef.current?.srcObject) {
+      videoRef.current.srcObject.getTracks().forEach(t => t.stop())
+      videoRef.current.srcObject = null
+    }
+    setFaceActive(false)
+    setFaceStatus('')
   }
 
-  function toggleManualMic() {
-    if (manualListening) stopManualListen()
-    else startManualListen()
+  function toggleFace() {
+    if (faceActive) stopFaceRecognition()
+    else startFaceRecognition()
   }
 
   const firstName = profile?.full_name?.split(' ')[0] || 'there'
-  const canMic = !!(window.SpeechRecognition || window.webkitSpeechRecognition)
   const sessionCount = (profile?.session_count || 0) + 1
 
   return (
-    <div style={{ height: '100vh', background: '#0d0a07', display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: 'sans-serif' }}>
+    <div style={{ height:'100vh', background:'#080604', display:'flex', flexDirection:'column', overflow:'hidden', fontFamily:'sans-serif', position:'relative' }}>
       <style>{`
         @keyframes nb{0%,80%,100%{transform:translateY(0);opacity:.3}40%{transform:translateY(-5px);opacity:1}}
-        @keyframes nr{from{transform:scale(0.8);opacity:1}to{transform:scale(2.6);opacity:0}}
-        @keyframes np{0%,100%{opacity:1}50%{opacity:.2}}
-        @keyframes ns{0%,100%{transform:scaleY(0.3)}50%{transform:scaleY(1)}}
-        .nova-page { display: grid; grid-template-columns: 220px 1fr; height: 100%; }
-        .nova-avatar-col { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px 16px; background: rgba(0,0,0,0.5); border-right: 1px solid rgba(255,255,255,0.04); overflow: hidden; }
-        .nova-chat-col { display: flex; flex-direction: column; overflow: hidden; }
-        .nova-messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; scroll-behavior: smooth; }
-        .nova-input-bar { background: rgba(0,0,0,0.6); border-top: 1px solid rgba(255,255,255,0.06); padding: 10px 14px; flex-shrink: 0; }
-        .nova-chip { font-size: 11px; padding: 4px 10px; border-radius: 99px; background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.4); border: 1px solid rgba(255,255,255,0.09); cursor: pointer; font-family: sans-serif; transition: all 0.15s; white-space: nowrap; }
-        .nova-chip:hover { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.8); }
-        .nova-textarea { flex: 1; padding: 10px 13px; border-radius: 12px; border: 1.5px solid rgba(255,255,255,0.1); font-size: 14px; resize: none; font-family: sans-serif; line-height: 1.5; background: rgba(255,255,255,0.06); color: #fff; outline: none; transition: border-color 0.2s; }
-        .nova-textarea:focus { border-color: #f5c842; }
-        .nova-textarea::placeholder { color: rgba(255,255,255,0.25); }
-        .nova-send { height: 42px; padding: 0 18px; border-radius: 12px; background: #f5c842; color: #3B1F0E; font-weight: 700; font-size: 14px; border: none; cursor: pointer; font-family: sans-serif; flex-shrink: 0; transition: opacity 0.2s; }
-        .nova-send:disabled { opacity: 0.3; cursor: not-allowed; }
-        .nova-mic { width: 42px; height: 42px; border-radius: 50%; border: none; cursor: pointer; flex-shrink: 0; position: relative; display: flex; align-items: center; justify-content: center; font-size: 17px; transition: all 0.2s; }
-        /* Mobile */
-        @media (max-width: 700px) {
-          .nova-page { grid-template-columns: 1fr; }
-          .nova-avatar-col { display: none; }
-          .nova-avatar-col.show-mobile { display: flex; height: 200px; border-right: none; border-bottom: 1px solid rgba(255,255,255,0.06); justify-content: center; padding: 12px; flex-direction: row; gap: 20px; }
-          .nova-mobile-toggle { display: flex !important; }
-        }
-        @media (min-width: 701px) {
-          .nova-mobile-toggle { display: none !important; }
-        }
-        .nova-msg-assistant { max-width: 82%; padding: 11px 14px; font-size: 14px; line-height: 1.75; white-space: pre-wrap; background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.88); border-radius: 4px 14px 14px 14px; border: 1px solid rgba(255,255,255,0.07); }
-        .nova-msg-user { max-width: 78%; padding: 11px 14px; font-size: 14px; line-height: 1.75; background: #7A3D14; color: #fff; border-radius: 14px 14px 4px 14px; }
+        @keyframes board-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes chat-in{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+        @keyframes cursor-blink{0%,100%{opacity:1}50%{opacity:0}}
+        .nova-btn { border:none; cursor:pointer; font-family:sans-serif; transition:all 0.2s; }
+        .nova-btn:active { transform:scale(0.95); }
+        ::-webkit-scrollbar{width:4px} ::-webkit-scrollbar-track{background:transparent} ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.15);border-radius:2px}
       `}</style>
 
-      {/* ── TOP BAR ── */}
-      <div style={{ padding: '11px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(0,0,0,0.7)', flexShrink: 0, borderBottom: '1px solid rgba(255,255,255,0.05)', zIndex: 20 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ width: 30, height: 30, borderRadius: '50%', background: '#f5c842', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 13, color: '#3B1F0E', fontFamily: 'serif', flexShrink: 0 }}>N</div>
+      {/* ═══ TOP BAR ═══ */}
+      <div style={{ padding:'10px 14px', display:'flex', alignItems:'center', justifyContent:'space-between', background:'rgba(0,0,0,0.8)', backdropFilter:'blur(20px)', flexShrink:0, borderBottom:'1px solid rgba(255,255,255,0.04)', zIndex:50 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:28, height:28, borderRadius:'50%', background:'#f5c842', display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, fontWeight:700, color:'#3B1F0E', fontFamily:'serif' }}>N</div>
           <div>
-            <div style={{ fontWeight: 600, fontSize: 14, color: '#fff', fontFamily: 'serif', letterSpacing: '-0.01em' }}>Professor Nova</div>
-            <div style={{ fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase', color: novaState === 'speaking' ? '#22c55e' : novaState === 'thinking' ? '#f5c842' : novaState === 'awake' ? '#a78bfa' : autoListen ? 'rgba(167,139,250,0.6)' : 'rgba(255,255,255,0.3)' }}>
-              {novaState === 'speaking' ? '● speaking' : novaState === 'thinking' ? '● thinking' : novaState === 'awake' ? '● listening' : autoListen ? '◉ always on' : '● ready · session ' + sessionCount}
+            <div style={{ fontSize:13, fontWeight:600, color:'#fff', letterSpacing:'-0.01em' }}>Professor Nova</div>
+            <div style={{ fontSize:9, color: novaState==='speaking'?'#22c55e':novaState==='listening'?'#64c8ff':novaState==='thinking'?'#f5c842':'rgba(255,255,255,0.3)', textTransform:'uppercase', letterSpacing:'0.06em' }}>
+              {novaState==='speaking'?'● speaking':novaState==='listening'?'● listening':novaState==='thinking'?'● thinking': micOn?'◉ mic active · session '+sessionCount:'● session '+sessionCount}
             </div>
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          {/* Mobile: toggle avatar/chat */}
-          <button className="nova-mobile-toggle" onClick={() => setShowChat(v => !v)}
-            style={{ display: 'none', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 99, padding: '5px 11px', fontSize: 11, color: 'rgba(255,255,255,0.6)', cursor: 'pointer' }}>
-            {showChat ? '👁 Nova' : '💬 Chat'}
+        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+          {/* Mic toggle */}
+          <button className="nova-btn" onClick={toggleMic} style={{ background: micOn?'rgba(100,200,255,0.15)':'rgba(255,255,255,0.05)', border:`1px solid ${micOn?'rgba(100,200,255,0.35)':'rgba(255,255,255,0.08)'}`, borderRadius:99, padding:'5px 10px', fontSize:10, color: micOn?'#64c8ff':'rgba(255,255,255,0.35)' }}>
+            {micOn ? '🎙 Listening' : '🎙 Off'}
           </button>
 
-          {/* Always-listen toggle */}
-          {canMic && (
-            <button onClick={toggleAutoListen} style={{
-              background: autoListen ? 'rgba(167,139,250,0.15)' : 'rgba(255,255,255,0.05)',
-              border: `1px solid ${autoListen ? 'rgba(167,139,250,0.4)' : 'rgba(255,255,255,0.1)'}`,
-              borderRadius: 99, padding: '5px 11px', fontSize: 11, cursor: 'pointer',
-              color: autoListen ? '#a78bfa' : 'rgba(255,255,255,0.4)', fontFamily: 'sans-serif'
-            }}>
-              {autoListen ? '◉ Listening' : '◯ Auto-listen'}
-            </button>
-          )}
-
-          <button onClick={() => { setVoiceOn(v => !v); window.speechSynthesis?.cancel(); setNovaState('idle') }} style={{
-            background: voiceOn ? 'rgba(245,200,66,0.12)' : 'rgba(255,255,255,0.05)',
-            border: `1px solid ${voiceOn ? 'rgba(245,200,66,0.3)' : 'rgba(255,255,255,0.1)'}`,
-            borderRadius: 99, padding: '5px 11px', fontSize: 11,
-            color: voiceOn ? '#f5c842' : 'rgba(255,255,255,0.35)', cursor: 'pointer', fontFamily: 'sans-serif'
-          }}>
+          {/* Voice toggle */}
+          <button className="nova-btn" onClick={() => { setVoiceOn(v=>!v); if(novaState==='speaking'){window.speechSynthesis?.cancel();setNovaState('idle');engineRef.current?.unblock()} }} style={{ background: voiceOn?'rgba(245,200,66,0.1)':'rgba(255,255,255,0.05)', border:`1px solid ${voiceOn?'rgba(245,200,66,0.25)':'rgba(255,255,255,0.08)'}`, borderRadius:99, padding:'5px 10px', fontSize:10, color: voiceOn?'#f5c842':'rgba(255,255,255,0.3)' }}>
             {voiceOn ? '🔊' : '🔇'}
           </button>
 
+          {/* Face recognition */}
+          <button className="nova-btn" onClick={toggleFace} style={{ background: faceActive?'rgba(167,139,250,0.15)':'rgba(255,255,255,0.05)', border:`1px solid ${faceActive?'rgba(167,139,250,0.35)':'rgba(255,255,255,0.08)'}`, borderRadius:99, padding:'5px 10px', fontSize:10, color: faceActive?'#a78bfa':'rgba(255,255,255,0.3)' }} title="Face recognition">
+            👁
+          </button>
+
           {group && (
-            <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', borderRadius: 99, padding: 3, gap: 2 }}>
-              {['personal', 'classroom'].map(m => (
-                <button key={m} onClick={() => setMode(m)} style={{
-                  padding: '4px 9px', borderRadius: 99, fontSize: 10, border: 'none', cursor: 'pointer',
-                  fontFamily: 'sans-serif', background: mode === m ? '#f5c842' : 'transparent',
-                  color: mode === m ? '#3B1F0E' : 'rgba(255,255,255,0.4)', transition: 'all 0.2s', fontWeight: mode === m ? 600 : 400
-                }}>{m === 'personal' ? 'Personal' : 'Class'}</button>
+            <div style={{ display:'flex', background:'rgba(255,255,255,0.05)', borderRadius:99, padding:2, gap:1 }}>
+              {['personal','classroom'].map(m=>(
+                <button key={m} className="nova-btn" onClick={()=>setMode(m)} style={{ padding:'4px 8px', borderRadius:99, fontSize:9, border:'none', background:mode===m?'#f5c842':'transparent', color:mode===m?'#3B1F0E':'rgba(255,255,255,0.35)', fontWeight:mode===m?600:400 }}>
+                  {m==='personal'?'Personal':'Class'}
+                </button>
               ))}
             </div>
           )}
 
-          <Link to="/dashboard" style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)', textDecoration: 'none', padding: '5px 6px' }}>←</Link>
+          <Link to="/dashboard" style={{ fontSize:10, color:'rgba(255,255,255,0.2)', textDecoration:'none', padding:'5px 6px' }}>←</Link>
         </div>
       </div>
 
-      {/* ── MAIN LAYOUT ── */}
-      <div className="nova-page" style={{ flex: 1, overflow: 'hidden' }}>
+      {/* ═══ MAIN: FULL SCREEN NOVA ═══ */}
+      <div style={{ flex:1, position:'relative', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', overflow:'hidden' }}>
 
-        {/* AVATAR COLUMN — sticky, never scrolls */}
-        <div className={`nova-avatar-col${!showChat ? ' show-mobile' : ''}`}>
-          <NovaAvatar state={novaState} size="lg" />
+        {/* Background atmosphere */}
+        <div style={{ position:'absolute', inset:0, background:'radial-gradient(ellipse at 50% 40%, rgba(245,200,66,0.04) 0%, transparent 65%)', pointerEvents:'none' }} />
+        <div style={{ position:'absolute', inset:0, backgroundImage:'radial-gradient(rgba(255,255,255,0.015) 1px, transparent 1px)', backgroundSize:'32px 32px', pointerEvents:'none' }} />
 
-          {novaState === 'speaking' && (
-            <button onClick={() => { window.speechSynthesis?.cancel(); setNovaState('idle') }}
-              style={{ marginTop: 12, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 99, padding: '6px 14px', fontSize: 11, color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontFamily: 'sans-serif' }}>
-              ■ Stop
-            </button>
-          )}
+        {/* Face video (small, top right when active) */}
+        {faceActive && (
+          <div style={{ position:'absolute', top:10, right:10, zIndex:30, borderRadius:12, overflow:'hidden', border:'1px solid rgba(167,139,250,0.3)', background:'#000' }}>
+            <video ref={videoRef} style={{ width:100, height:75, objectFit:'cover', display:'block' }} muted playsInline />
+            <div style={{ fontSize:9, color:'#a78bfa', textAlign:'center', padding:'2px 6px', background:'rgba(0,0,0,0.8)' }}>{faceStatus || 'Scanning...'}</div>
+          </div>
+        )}
 
-          {/* Listening indicator */}
-          {novaState === 'awake' && (
-            <div style={{ marginTop: 10, display: 'flex', gap: 3, alignItems: 'center', justifyContent: 'center' }}>
-              {[1,2,3,4,3,2,1].map((h,i) => (
-                <div key={i} style={{ width: 3, background: '#a78bfa', borderRadius: 2, height: h * 4, animation: 'ns 0.5s ease-in-out infinite', animationDelay: i * 0.07 + 's' }} />
-              ))}
-            </div>
-          )}
+        {/* Nova avatar — center stage */}
+        <div style={{ position:'relative', zIndex:10, marginBottom: boardVisible ? 16 : 0, transition:'margin 0.4s' }}>
+          <NovaAvatar state={novaState} size={Math.min(window.innerWidth * 0.45, 200)} />
         </div>
 
-        {/* CHAT COLUMN */}
-        <div className="nova-chat-col" style={{ display: !showChat && window.innerWidth <= 700 ? 'none' : 'flex' }}>
+        {/* Error */}
+        {error && (
+          <div style={{ position:'absolute', top:12, left:'50%', transform:'translateX(-50%)', background:'rgba(220,38,38,0.15)', border:'1px solid rgba(220,38,38,0.3)', borderRadius:10, padding:'8px 14px', fontSize:12, color:'#fca5a5', display:'flex', gap:8, alignItems:'center', zIndex:40, maxWidth:'90%' }}>
+            <span>{error}</span>
+            <button onClick={()=>setError('')} style={{ background:'none', border:'none', color:'#fca5a5', cursor:'pointer', fontSize:16 }}>×</button>
+          </div>
+        )}
+
+        {/* ═══ BLACKBOARD — Nova's response ═══ */}
+        {boardVisible && (
+          <div style={{ position:'absolute', bottom:0, left:0, right:0, background:'linear-gradient(180deg,rgba(8,6,4,0) 0%,rgba(8,6,4,0.95) 20%,rgba(14,28,18,0.98) 100%)', padding:'20px 24px 80px', animation:'board-in 0.4s ease-out', zIndex:20, maxHeight:'55vh', overflow:'hidden' }}>
+            {/* Board header */}
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+              <div style={{ width:8, height:8, borderRadius:'50%', background:'#22c55e', animation:novaState==='speaking'?'nb 1s ease-in-out infinite':undefined }} />
+              <span style={{ fontSize:10, color:'rgba(255,255,255,0.3)', textTransform:'uppercase', letterSpacing:'0.06em' }}>Professor Nova</span>
+            </div>
+            {/* Chalk text with typewriter */}
+            <TypewriterText text={boardText} style={{ fontSize:'clamp(13px,2.2vw,16px)', color:'rgba(255,255,235,0.9)', lineHeight:1.75, fontFamily:"'Courier New',monospace", textShadow:'0 0 12px rgba(255,255,200,0.2)', letterSpacing:'0.02em', maxHeight:'calc(55vh - 80px)', overflowY:'auto' }} />
+          </div>
+        )}
+
+        {/* ═══ IDLE: greeting text ═══ */}
+        {!boardVisible && messages.length === 0 && novaState === 'idle' && (
+          <div style={{ textAlign:'center', padding:'0 32px', zIndex:10 }}>
+            <div style={{ fontSize:13, color:'rgba(255,255,255,0.25)', lineHeight:1.8 }}>
+              {micOn ? 'Just speak — I\'m listening' : 'Tap 🎙 to start talking to me'}
+            </div>
+            {micOn && <div style={{ marginTop:8, fontSize:11, color:'rgba(100,200,255,0.35)' }}>◉ microphone active</div>}
+          </div>
+        )}
+
+        {/* Loading dots */}
+        {loading && (
+          <div style={{ position:'absolute', bottom:90, left:'50%', transform:'translateX(-50%)', display:'flex', gap:6, zIndex:30 }}>
+            {[0,1,2].map(i=><div key={i} style={{ width:8, height:8, borderRadius:'50%', background:'#f5c842', animation:'nb 1.2s ease-in-out infinite', animationDelay:i*0.2+'s', opacity:0.7 }} />)}
+          </div>
+        )}
+      </div>
+
+      {/* ═══ BOTTOM CONTROLS ═══ */}
+      <div style={{ position:'absolute', bottom:16, left:0, right:0, display:'flex', justifyContent:'center', gap:12, zIndex:50, padding:'0 20px' }}>
+
+        {/* Chat history icon */}
+        <button className="nova-btn" onClick={()=>setChatOpen(v=>!v)} style={{ width:48, height:48, borderRadius:'50%', background:'rgba(255,255,255,0.08)', border:'1px solid rgba(255,255,255,0.12)', fontSize:18, display:'flex', alignItems:'center', justifyContent:'center', backdropFilter:'blur(12px)' }} title="Chat history">
+          💬
+          {messages.length > 0 && <span style={{ position:'absolute', top:8, right:8, width:8, height:8, borderRadius:'50%', background:'#f5c842' }} />}
+        </button>
+
+        {/* Big mic button */}
+        <button className="nova-btn" onClick={toggleMic} style={{ width:64, height:64, borderRadius:'50%', background: micOn?'rgba(100,200,255,0.2)':'rgba(255,255,255,0.08)', border:`2px solid ${micOn?'#64c8ff':'rgba(255,255,255,0.15)'}`, fontSize:24, display:'flex', alignItems:'center', justifyContent:'center', backdropFilter:'blur(12px)', position:'relative' }}>
+          {micOn && <div style={{ position:'absolute', inset:-6, borderRadius:'50%', border:'2px solid rgba(100,200,255,0.4)', animation:'nv-ring1 2s ease-out infinite' }} />}
+          🎙
+        </button>
+
+        {/* Stop speaking */}
+        {novaState === 'speaking' && (
+          <button className="nova-btn" onClick={()=>{ window.speechSynthesis?.cancel(); setNovaState('idle'); setBoardVisible(false); engineRef.current?.unblock() }} style={{ width:48, height:48, borderRadius:'50%', background:'rgba(220,38,38,0.15)', border:'1px solid rgba(220,38,38,0.3)', fontSize:16, display:'flex', alignItems:'center', justifyContent:'center', backdropFilter:'blur(12px)' }}>
+            ■
+          </button>
+        )}
+      </div>
+
+      {/* ═══ CHAT DRAWER ═══ */}
+      {chatOpen && (
+        <div style={{ position:'absolute', inset:0, zIndex:100, background:'rgba(0,0,0,0.85)', backdropFilter:'blur(20px)', display:'flex', flexDirection:'column', animation:'chat-in 0.25s ease-out' }}>
+          {/* Drawer header */}
+          <div style={{ padding:'14px 16px', display:'flex', alignItems:'center', justifyContent:'space-between', borderBottom:'1px solid rgba(255,255,255,0.06)', flexShrink:0 }}>
+            <span style={{ fontSize:13, fontWeight:600, color:'#fff' }}>Conversation</span>
+            <button className="nova-btn" onClick={()=>setChatOpen(false)} style={{ background:'rgba(255,255,255,0.06)', border:'none', borderRadius:99, width:28, height:28, fontSize:14, color:'rgba(255,255,255,0.5)', display:'flex', alignItems:'center', justifyContent:'center' }}>×</button>
+          </div>
 
           {/* Messages */}
-          <div className="nova-messages">
-            {messages.length === 0 && (
-              <div style={{ background: 'rgba(245,200,66,0.07)', border: '1px solid rgba(245,200,66,0.15)', borderRadius: 16, padding: '18px 20px', maxWidth: 520 }}>
-                <div style={{ fontWeight: 600, fontSize: 15, color: '#f5c842', marginBottom: 8, fontFamily: 'serif' }}>
-                  Hello, {firstName}!
-                </div>
-                <p style={{ fontSize: 14, color: 'rgba(255,255,255,0.6)', lineHeight: 1.75 }}>
-                  {mode === 'classroom'
-                    ? "Welcome everyone. I'm Professor Nova. What shall we tackle today?"
-                    : "I'm Professor Nova. I know your courses and remember what we've covered. What shall we work on today?"}
-                </p>
-                {canMic && (
-                  <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.25)', marginTop: 10 }}>
-                    {autoListen ? '◉ I\'m listening — just speak naturally' : '🎤 Tap mic or enable Auto-listen to speak to me'}
-                  </p>
-                )}
-              </div>
-            )}
-
-            {messages.map((msg, i) => (
-              <div key={i} style={{ display: 'flex', flexDirection: msg.role === 'user' ? 'row-reverse' : 'row', gap: 8, alignItems: 'flex-start' }}>
-                {msg.role === 'assistant' && (
-                  <div style={{ width: 26, height: 26, borderRadius: '50%', flexShrink: 0, background: '#f5c842', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 11, color: '#3B1F0E', fontFamily: 'serif', marginTop: 2 }}>N</div>
-                )}
-                <div className={msg.role === 'assistant' ? 'nova-msg-assistant' : 'nova-msg-user'}>
+          <div style={{ flex:1, overflowY:'auto', padding:'14px 16px', display:'flex', flexDirection:'column', gap:10 }}>
+            {messages.length===0 && <p style={{ fontSize:13, color:'rgba(255,255,255,0.3)', textAlign:'center', marginTop:40 }}>No messages yet — start talking to Nova</p>}
+            {messages.map((msg,i)=>(
+              <div key={i} style={{ display:'flex', flexDirection:msg.role==='user'?'row-reverse':'row', gap:7, alignItems:'flex-start' }}>
+                {msg.role==='assistant' && <div style={{ width:24, height:24, borderRadius:'50%', background:'#f5c842', fontSize:10, fontWeight:700, color:'#3B1F0E', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'serif', flexShrink:0, marginTop:2 }}>N</div>}
+                <div style={{ maxWidth:'80%', padding:'9px 12px', fontSize:13, lineHeight:1.65, whiteSpace:'pre-wrap', background:msg.role==='user'?'#7A3D14':'rgba(255,255,255,0.06)', color:msg.role==='user'?'#fff':'rgba(255,255,255,0.82)', borderRadius:msg.role==='user'?'12px 12px 3px 12px':'3px 12px 12px 12px', border:'1px solid rgba(255,255,255,0.06)' }}>
                   {msg.content}
-                  {msg.role === 'assistant' && voiceOn && (
-                    <button onClick={() => { setNovaState('speaking'); speakNova(msg.content, null, () => setNovaState('idle')) }}
-                      style={{ display: 'block', marginTop: 5, background: 'none', border: 'none', fontSize: 10, color: 'rgba(255,255,255,0.25)', cursor: 'pointer', padding: 0, fontFamily: 'sans-serif' }}>
-                      🔊 Replay
-                    </button>
+                  {msg.role==='assistant' && voiceOn && (
+                    <button onClick={()=>{ setChatOpen(false); setNovaState('speaking'); setBoardText(msg.content); setBoardVisible(true); speakNova(msg.content,()=>{setNovaState('idle');setBoardVisible(false);engineRef.current?.unblock()}) }} style={{ display:'block', marginTop:4, background:'none', border:'none', fontSize:10, color:'rgba(255,255,255,0.2)', cursor:'pointer', padding:0, fontFamily:'sans-serif' }}>🔊 Replay</button>
                   )}
                 </div>
               </div>
             ))}
-
-            {/* Interim speech text */}
-            {(manualListening || novaState === 'awake') && interimText && (
-              <div style={{ display: 'flex', flexDirection: 'row-reverse', gap: 8 }}>
-                <div style={{ maxWidth: '78%', padding: '10px 13px', fontSize: 13, color: 'rgba(255,255,255,0.4)', background: 'rgba(255,255,255,0.03)', border: '1px dashed rgba(255,255,255,0.1)', borderRadius: '14px 14px 4px 14px', fontStyle: 'italic' }}>
-                  {interimText}...
-                </div>
-              </div>
-            )}
-
-            {loading && (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <div style={{ width: 26, height: 26, borderRadius: '50%', background: '#f5c842', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 11, color: '#3B1F0E', fontFamily: 'serif' }}>N</div>
-                <div style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: '4px 14px 14px 14px', padding: '10px 16px', display: 'flex', gap: 5 }}>
-                  {[0,1,2].map(i => <div key={i} style={{ width: 7, height: 7, borderRadius: '50%', background: '#f5c842', animation: 'nb 1.2s ease-in-out infinite', animationDelay: i*0.2+'s', opacity: 0.6 }} />)}
-                </div>
-              </div>
-            )}
-
-            {error && (
-              <div style={{ background: 'rgba(220,38,38,0.12)', border: '1px solid rgba(220,38,38,0.25)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#fca5a5', display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                <span style={{ lineHeight: 1.5 }}>{error}</span>
-                <button onClick={() => setError('')} style={{ background: 'none', border: 'none', color: '#fca5a5', cursor: 'pointer', fontSize: 18, lineHeight: 1, flexShrink: 0 }}>×</button>
-              </div>
-            )}
             <div ref={bottomRef} />
           </div>
 
-          {/* ── INPUT BAR ── */}
-          <div className="nova-input-bar">
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
-              {['Explain this topic','Quiz me',"I don't understand",'Practice problem'].map(s => (
-                <button key={s} className="nova-chip" onClick={() => sendMessage(s)} disabled={loading}>{s}</button>
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-              <textarea className="nova-textarea"
-                value={input}
-                onChange={e => setInput(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(input) } }}
-                placeholder={autoListen ? 'Just speak — or type here...' : 'Type your question or tap 🎤'}
-                rows={1}
-                disabled={loading || manualListening}
-              />
-              {canMic && (
-                <button className="nova-mic" onClick={toggleManualMic}
-                  style={{ background: manualListening ? '#ef4444' : 'rgba(255,255,255,0.08)' }}>
-                  {manualListening && <div style={{ position: 'absolute', inset: -4, borderRadius: '50%', border: '2px solid #ef4444', animation: 'nr 1s ease-out infinite' }} />}
-                  {manualListening ? '⏹' : '🎤'}
-                </button>
-              )}
-              <button className="nova-send" onClick={() => sendMessage(input)} disabled={!input.trim() || loading}
-                style={{ opacity: input.trim() && !loading ? 1 : 0.3 }}>
-                Send
-              </button>
-            </div>
+          {/* Type input */}
+          <div style={{ padding:'10px 14px', borderTop:'1px solid rgba(255,255,255,0.06)', flexShrink:0, display:'flex', gap:8 }}>
+            <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter'&&input.trim()){sendMessage(input);setChatOpen(false)} }} placeholder="Type to Professor Nova..." style={{ flex:1, background:'rgba(255,255,255,0.07)', border:'1.5px solid rgba(255,255,255,0.1)', borderRadius:12, padding:'10px 13px', fontSize:13, color:'#fff', fontFamily:'sans-serif', outline:'none' }} onFocus={e=>e.target.style.borderColor='#f5c842'} onBlur={e=>e.target.style.borderColor='rgba(255,255,255,0.1)'} />
+            <button className="nova-btn" onClick={()=>{sendMessage(input);setChatOpen(false)}} disabled={!input.trim()||loading} style={{ height:42, padding:'0 16px', borderRadius:12, background:'#f5c842', color:'#3B1F0E', fontWeight:700, fontSize:13, border:'none', opacity:input.trim()&&!loading?1:0.3 }}>Send</button>
           </div>
         </div>
-      </div>
+      )}
+    </div>
+  )
+}
+
+// Typewriter text component
+function TypewriterText({ text, style }) {
+  const [displayed, setDisplayed] = useState('')
+  useEffect(() => {
+    setDisplayed('')
+    let i = 0
+    const speed = 16
+    function tick() {
+      if (i < text.length) {
+        setDisplayed(text.slice(0, ++i))
+        setTimeout(tick, speed)
+      }
+    }
+    tick()
+  }, [text])
+  return (
+    <div style={style}>
+      {displayed}
+      {displayed.length < text.length && <span style={{ animation:'cursor-blink 0.7s ease-in-out infinite', display:'inline-block', width:2, height:'1em', background:'rgba(255,255,235,0.7)', marginLeft:2, verticalAlign:'middle' }} />}
     </div>
   )
 }

@@ -260,3 +260,21 @@ create policy "Students can manage own schedule"
 -- Public: true
 -- Then add this policy in Storage -> Policies:
 --   Authenticated users can upload to resources bucket
+
+-- =============================================
+-- FACE PROFILES (Phase 9 - visual recognition)
+-- =============================================
+create table if not exists face_profiles (
+  id           uuid primary key default gen_random_uuid(),
+  student_id   uuid references profiles(id) on delete cascade,
+  name         text not null,
+  relationship text default 'student', -- 'student', 'friend', 'family', 'other'
+  descriptor   text not null,           -- JSON array of Float32Array face embedding
+  photo_url    text,
+  created_at   timestamptz default now()
+);
+
+alter table face_profiles enable row level security;
+
+create policy "Students manage own face profiles"
+  on face_profiles for all using (auth.uid() = student_id);
