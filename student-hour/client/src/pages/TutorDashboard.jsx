@@ -17,10 +17,10 @@ async function apiFetch(path, method = 'GET', body) {
 
 function TutorSidebar({ active, setActive, firstName, signOut, group, onClose }) {
   const items = [
-    { id: 'chat', label: 'Group Chat', icon: '' },
-    { id: 'upload', label: 'Upload Resource', icon: '' },
-    { id: 'task', label: 'Assign Task', icon: '' },
-    { id: 'progress', label: 'Group Progress', icon: '' },
+    { id: 'chat', label: 'Group Chat', icon: '💬' },
+    { id: 'upload', label: 'Upload Resource', icon: '📤' },
+    { id: 'task', label: 'Assign Task', icon: '📋' },
+    { id: 'progress', label: 'Group Progress', icon: '📊' },
   ]
   return (
     <>
