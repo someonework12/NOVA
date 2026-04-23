@@ -159,7 +159,7 @@ export default function ClassroomBoard({ text, state, onDone }) {
         fontSize: 10, color: 'rgba(255,255,255,0.2)',
         textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: 'sans-serif'
       }}>
-         Board
+        Board
       </div>
     </div>
   )

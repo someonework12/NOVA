@@ -36,7 +36,7 @@ function AdminSidebar({ active, setActive, firstName, signOut, onClose }) {
             background: active === item.id ? 'rgba(245,200,66,0.15)' : 'transparent',
             color: active === item.id ? 'var(--yellow-400)' : 'rgba(255,255,255,0.55)',
           }}>
-            <span style={{ fontSize: 15 }}>{item.icon}</span>{item.label}
+            {item.label}
           </button>
         ))}
       </nav>
