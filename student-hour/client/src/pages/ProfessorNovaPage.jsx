@@ -448,17 +448,17 @@ export default function ProfessorNovaPage() {
         <div style={{ display:'flex', alignItems:'center', gap:6 }}>
           {/* Mic toggle */}
           <button className="nova-btn" onClick={toggleMic} style={{ background: micOn?'rgba(100,200,255,0.15)':'rgba(255,255,255,0.05)', border:`1px solid ${micOn?'rgba(100,200,255,0.35)':'rgba(255,255,255,0.08)'}`, borderRadius:99, padding:'5px 10px', fontSize:10, color: micOn?'#64c8ff':'rgba(255,255,255,0.35)' }}>
-            {micOn ? '🎙 Listening' : '🎙 Off'}
+            {micOn ? 'Mic On' : 'Mic Off'}
           </button>
 
           {/* Voice toggle */}
           <button className="nova-btn" onClick={() => { setVoiceOn(v=>!v); if(novaState==='speaking'){window.speechSynthesis?.cancel();setNovaState('idle');engineRef.current?.unblock()} }} style={{ background: voiceOn?'rgba(245,200,66,0.1)':'rgba(255,255,255,0.05)', border:`1px solid ${voiceOn?'rgba(245,200,66,0.25)':'rgba(255,255,255,0.08)'}`, borderRadius:99, padding:'5px 10px', fontSize:10, color: voiceOn?'#f5c842':'rgba(255,255,255,0.3)' }}>
-            {voiceOn ? '🔊' : '🔇'}
+            {voiceOn ? '' : ''}
           </button>
 
           {/* Face recognition */}
           <button className="nova-btn" onClick={toggleFace} style={{ background: faceActive?'rgba(167,139,250,0.15)':'rgba(255,255,255,0.05)', border:`1px solid ${faceActive?'rgba(167,139,250,0.35)':'rgba(255,255,255,0.08)'}`, borderRadius:99, padding:'5px 10px', fontSize:10, color: faceActive?'#a78bfa':'rgba(255,255,255,0.3)' }} title="Face recognition">
-            👁
+            Cam
           </button>
 
           {group && (
@@ -520,7 +520,7 @@ export default function ProfessorNovaPage() {
         {!boardVisible && messages.length === 0 && novaState === 'idle' && (
           <div style={{ textAlign:'center', padding:'0 32px', zIndex:10 }}>
             <div style={{ fontSize:13, color:'rgba(255,255,255,0.25)', lineHeight:1.8 }}>
-              {micOn ? 'Just speak — I\'m listening' : 'Tap 🎙 to start talking to me'}
+              {micOn ? 'Just speak — I\'m listening' : 'Tap  to start talking to me'}
             </div>
             {micOn && <div style={{ marginTop:8, fontSize:11, color:'rgba(100,200,255,0.35)' }}>◉ microphone active</div>}
           </div>
@@ -539,14 +539,14 @@ export default function ProfessorNovaPage() {
 
         {/* Chat history icon */}
         <button className="nova-btn" onClick={()=>setChatOpen(v=>!v)} style={{ width:48, height:48, borderRadius:'50%', background:'rgba(255,255,255,0.08)', border:'1px solid rgba(255,255,255,0.12)', fontSize:18, display:'flex', alignItems:'center', justifyContent:'center', backdropFilter:'blur(12px)' }} title="Chat history">
-          💬
+          
           {messages.length > 0 && <span style={{ position:'absolute', top:8, right:8, width:8, height:8, borderRadius:'50%', background:'#f5c842' }} />}
         </button>
 
         {/* Big mic button */}
         <button className="nova-btn" onClick={toggleMic} style={{ width:64, height:64, borderRadius:'50%', background: micOn?'rgba(100,200,255,0.2)':'rgba(255,255,255,0.08)', border:`2px solid ${micOn?'#64c8ff':'rgba(255,255,255,0.15)'}`, fontSize:24, display:'flex', alignItems:'center', justifyContent:'center', backdropFilter:'blur(12px)', position:'relative' }}>
           {micOn && <div style={{ position:'absolute', inset:-6, borderRadius:'50%', border:'2px solid rgba(100,200,255,0.4)', animation:'nv-ring1 2s ease-out infinite' }} />}
-          🎙
+          
         </button>
 
         {/* Stop speaking */}
@@ -575,7 +575,7 @@ export default function ProfessorNovaPage() {
                 <div style={{ maxWidth:'80%', padding:'9px 12px', fontSize:13, lineHeight:1.65, whiteSpace:'pre-wrap', background:msg.role==='user'?'#7A3D14':'rgba(255,255,255,0.06)', color:msg.role==='user'?'#fff':'rgba(255,255,255,0.82)', borderRadius:msg.role==='user'?'12px 12px 3px 12px':'3px 12px 12px 12px', border:'1px solid rgba(255,255,255,0.06)' }}>
                   {msg.content}
                   {msg.role==='assistant' && voiceOn && (
-                    <button onClick={()=>{ setChatOpen(false); setNovaState('speaking'); setBoardText(msg.content); setBoardVisible(true); speakNova(msg.content,()=>{setNovaState('idle');setBoardVisible(false);engineRef.current?.unblock()}) }} style={{ display:'block', marginTop:4, background:'none', border:'none', fontSize:10, color:'rgba(255,255,255,0.2)', cursor:'pointer', padding:0, fontFamily:'sans-serif' }}>🔊 Replay</button>
+                    <button onClick={()=>{ setChatOpen(false); setNovaState('speaking'); setBoardText(msg.content); setBoardVisible(true); speakNova(msg.content,()=>{setNovaState('idle');setBoardVisible(false);engineRef.current?.unblock()}) }} style={{ display:'block', marginTop:4, background:'none', border:'none', fontSize:10, color:'rgba(255,255,255,0.2)', cursor:'pointer', padding:0, fontFamily:'sans-serif' }}>Replay</button>
                   )}
                 </div>
               </div>

@@ -103,7 +103,7 @@ export default function LandingPage() {
               {['Remembers your name, courses, and past struggles','Teaches in classroom mode or one-on-one','Uses mentor-uploaded materials as his primary source','Builds a private learning profile just for you'].map(f=>(
                 <div key={f} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
                   <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--yellow-500)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 }}>
-                    <span style={{ fontSize: 11, color: 'var(--brown-900)', fontWeight: 700 }}>✓</span>
+                    <span style={{ fontSize: 11, color: 'var(--brown-900)', fontWeight: 700 }}></span>
                   </div>
                   <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>{f}</span>
                 </div>

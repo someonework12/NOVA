@@ -144,14 +144,14 @@ export default function FaceRecognition({ onRecognised, onUnknown, active }) {
 
       {/* Status overlay */}
       <div style={{ position:'absolute', top:8, left:8, background:'rgba(0,0,0,0.7)', borderRadius:99, padding:'3px 10px', fontSize:10, color:'rgba(255,255,255,0.7)', backdropFilter:'blur(8px)', textTransform:'uppercase', letterSpacing:'0.06em', fontFamily:'sans-serif' }}>
-        {status === 'loading' ? '⟳ Loading...' : status === 'error' ? '✗ No camera' : status === 'running' ? '◉ Watching' : '○ Off'}
+        {status === 'loading' ? 'Loading...' : status === 'error' ? 'No camera' : status === 'running' ? '◉ Watching' : '○ Off'}
       </div>
 
       {/* Recognition result */}
       {recognised && (
         <div style={{ position:'absolute', bottom:8, left:8, right:8, background:'rgba(0,0,0,0.8)', borderRadius:8, padding:'6px 10px', backdropFilter:'blur(8px)', border:`1px solid ${recognised.name==='Unknown'?'rgba(255,255,255,0.1)':'rgba(245,200,66,0.3)'}` }}>
           <div style={{ fontSize:11, fontWeight:600, color: recognised.name==='Unknown'?'rgba(255,255,255,0.5)':'#f5c842', fontFamily:'sans-serif' }}>
-            {recognised.name === 'Unknown' ? '? Unrecognised' : `✓ ${recognised.name}`}
+            {recognised.name === 'Unknown' ? '? Unrecognised' : ` ${recognised.name}`}
           </div>
           {recognised.relationship && recognised.name !== 'Unknown' && (
             <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', fontFamily:'sans-serif' }}>{recognised.relationship}</div>
