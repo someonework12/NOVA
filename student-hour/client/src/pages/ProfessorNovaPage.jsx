@@ -236,9 +236,17 @@ export default function ProfessorNovaPage() {
         if (sendMessageRef.current) sendMessageRef.current(text)
       },
       onState: (state) => {
-        if (state === 'listening' && !loadingRef.current) setNovaState('listening')
-        else if (state === 'idle' && !loadingRef.current) setNovaState('idle')
-        else if (state === 'denied') setError('Microphone access denied. Allow microphone in browser settings then refresh.')
+        if (state === 'listening' && !loadingRef.current) {
+          // Show listening state — but only if Nova isn't currently speaking
+          // (we listen while Nova speaks to enable interruption)
+          if (!speakingRef.current) setNovaState('listening')
+        }
+        else if (state === 'idle' && !loadingRef.current && !speakingRef.current) {
+          setNovaState('idle')
+        }
+        else if (state === 'denied') {
+          setError('Microphone access denied. Allow microphone in browser settings then refresh.')
+        }
       }
     })
     engineRef.current = engine
@@ -340,11 +348,15 @@ export default function ProfessorNovaPage() {
       if (voiceOnRef.current) {
         speakingRef.current = true
         setNovaState('speaking')
+        // Unblock the engine NOW so student can interrupt while Nova speaks
+        // The engine listens — if student speaks, sendMessage cancels TTS
+        // and processes the interruption immediately
+        engineRef.current?.unblock()
         speakNova(reply, () => {
+          // Nova finished speaking naturally (no interruption)
           speakingRef.current = false
-          setNovaState('idle')
+          setNovaState(s => s === 'speaking' ? 'idle' : s)
           setBoardVisible(false)
-          engineRef.current?.unblock()
         }, speakingRef)
       } else {
         setNovaState('idle')
