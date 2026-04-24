@@ -215,6 +215,7 @@ export default function ProfessorNovaPage() {
   const bottomRef = useRef(null)
   const greetedRef = useRef(false)
   const speakingRef = useRef(false)
+  const sendMessageRef = useRef(null)
 
   useEffect(() => { messagesRef.current = messages }, [messages])
   useEffect(() => { loadingRef.current = loading }, [loading])
@@ -230,9 +231,9 @@ export default function ProfessorNovaPage() {
 
     const engine = new SpeechEngine({
       onSpeech: (text) => {
-        // Allow speaking while Nova is mid-response (interruption)
-        // Don't gate on loadingRef here — sendMessage handles that
-        sendMessage(text)
+        // Call via ref so we always get the latest sendMessage
+        // even if mode/group changed since mount
+        if (sendMessageRef.current) sendMessageRef.current(text)
       },
       onState: (state) => {
         if (state === 'listening' && !loadingRef.current) setNovaState('listening')
@@ -242,21 +243,32 @@ export default function ProfessorNovaPage() {
     })
     engineRef.current = engine
 
-    const t1 = setTimeout(() => { engine.start(); setMicOn(true) }, 600)
-
-    const t2 = setTimeout(() => {
-      if (!greetedRef.current && voiceOnRef.current) {
+    // Start engine and greeting in one sequence — no gap that causes mic flicker
+    const t1 = setTimeout(() => {
+      setMicOn(true)
+      const name = profile?.full_name?.split(' ')[0] || 'there'
+      if (voiceOnRef.current && !greetedRef.current) {
         greetedRef.current = true
-        const name = profile?.full_name?.split(' ')[0] || 'there'
-        engine.block()
+        // Speak greeting first, THEN start listening
+        // This prevents the mic from flickering open/closed during the greeting
         setNovaState('speaking')
+        speakingRef.current = true
         speakNova(
           'Hello ' + name + '. I am Professor Nova. I am listening — speak to me naturally.',
-          () => { setNovaState('idle'); engine.unblock() },
+          () => {
+            speakingRef.current = false
+            setNovaState('idle')
+            engine.start()  // Start listening AFTER greeting finishes
+          },
           speakingRef
         )
+      } else {
+        // Voice off or already greeted — start listening immediately
+        engine.start()
       }
-    }, 1000)
+    }, 800)
+
+    const t2 = null
 
     // Keep-alive ping every 4 minutes to prevent Render cold start 504s
     const keepAlive = setInterval(async () => {
@@ -264,7 +276,7 @@ export default function ProfessorNovaPage() {
     }, 4 * 60 * 1000)
 
     return () => {
-      clearTimeout(t1); clearTimeout(t2)
+      clearTimeout(t1)
       clearInterval(keepAlive)
       engine.stop()
       window.speechSynthesis?.cancel()
@@ -348,6 +360,10 @@ export default function ProfessorNovaPage() {
       loadingRef.current = false
     }
   }, [mode, group])
+
+  // Keep sendMessageRef always pointing to latest sendMessage
+  // This allows the engine (created once at mount) to call the current version
+  sendMessageRef.current = sendMessage
 
   function toggleMic() {
     if (micOn) {
