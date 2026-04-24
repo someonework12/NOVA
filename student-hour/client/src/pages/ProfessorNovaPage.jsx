@@ -1,3 +1,10 @@
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { Link } from 'react-router-dom'
+import { useAuth } from '../hooks/useAuth.jsx'
+import { useGroup } from '../hooks/useGroup.js'
+import { supabase } from '../lib/supabase.js'
+import NovaAvatar from '../components/NovaAvatar.jsx'
+
 // ═══════════════════════════════════════════════════════════════════
 // SPEECH ENGINE v5 — Bulletproof mobile + desktop listener
 //
