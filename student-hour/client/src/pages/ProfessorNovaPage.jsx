@@ -76,24 +76,24 @@ class SpeechEngine {
     }
 
     rec.onresult = (e) => {
-      // Find the result with highest confidence across all alternatives
-      let best = ''
-      let bestConf = -1
+      let best = '', bestConf = -1
       for (let i = 0; i < e.results.length; i++) {
         for (let j = 0; j < e.results[i].length; j++) {
           const r = e.results[i][j]
           const conf = r.confidence > 0 ? r.confidence : 0.5
-          if (conf > bestConf) {
-            bestConf = conf
-            best = r.transcript
-          }
+          if (conf > bestConf) { bestConf = conf; best = r.transcript }
         }
       }
       const text = best.trim()
       if (text.length > 1) {
+        // Block synchronously NOW — before onend fires.
+        // sendMessage is async so its block() call is too late.
+        // onend fires immediately after onresult in the same event loop.
+        // If blocked=false when onend runs, the engine restarts and flickers.
+        this.blocked = true
+        this._destroy()
         this.onSpeech(text)
-        // block() will be called by sendMessage synchronously
-        // unblock() will restart listening after Nova responds
+        // unblock() is called by sendMessage after Nova finishes responding
       }
     }
 
@@ -103,17 +103,16 @@ class SpeechEngine {
         this.onState('denied')
         return
       }
-      // no-speech, network, audio-capture — just restart
       if (this.active && !this.blocked) {
-        this.timer = setTimeout(() => this._listen(), 300)
+        this.timer = setTimeout(() => this._listen(), 400)
       }
     }
 
     rec.onend = () => {
-      // If we got a result, sendMessage called block() already — don't restart
-      // If no result (silence, timeout) — restart to keep listening
+      // blocked=true: we got speech, waiting for unblock() after Nova responds
+      // blocked=false: silence/timeout, restart to keep listening
       if (this.active && !this.blocked) {
-        this.timer = setTimeout(() => this._listen(), 200)
+        this.timer = setTimeout(() => this._listen(), 300)
       }
     }
 
