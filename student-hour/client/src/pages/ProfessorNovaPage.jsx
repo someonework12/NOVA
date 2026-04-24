@@ -25,6 +25,7 @@ class SpeechEngine {
     this.blocked = false
     this.rec = null
     this.timer = null
+    this.gotResult = false  // tracks if current session produced a result
   }
 
   start() {
@@ -46,8 +47,7 @@ class SpeechEngine {
   unblock() {
     this.blocked = false
     if (this.active) {
-      // Small delay so Nova's TTS audio fully stops before mic opens
-      this.timer = setTimeout(() => this._listen(), 800)
+      this.timer = setTimeout(() => this._listen(), 900)
     }
   }
 
@@ -56,44 +56,46 @@ class SpeechEngine {
     try { this.rec?.abort() } catch (_) {}
     try { this.rec?.stop() } catch (_) {}
     this.rec = null
+    this.gotResult = false
   }
 
   _listen() {
     if (!this.active || this.blocked) return
     this._destroy()
+    this.gotResult = false
 
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition
     if (!SR) return
 
     const rec = new SR()
-    rec.continuous = false      // works on ALL browsers including Android Chrome
-    rec.interimResults = false  // only final results — cleaner, more reliable
+    rec.continuous = false
+    rec.interimResults = false
     rec.lang = 'en-US'
-    rec.maxAlternatives = 5     // pick best from 5 alternatives — helps with accents
+    rec.maxAlternatives = 5
 
     rec.onstart = () => {
       if (!this.blocked) this.onState('listening')
     }
 
     rec.onresult = (e) => {
-      // Find the result with highest confidence across all alternatives
-      let best = ''
-      let bestConf = -1
+      // Pick highest-confidence alternative
+      let best = '', bestConf = -1
       for (let i = 0; i < e.results.length; i++) {
         for (let j = 0; j < e.results[i].length; j++) {
           const r = e.results[i][j]
           const conf = r.confidence > 0 ? r.confidence : 0.5
-          if (conf > bestConf) {
-            bestConf = conf
-            best = r.transcript
-          }
+          if (conf > bestConf) { bestConf = conf; best = r.transcript }
         }
       }
       const text = best.trim()
       if (text.length > 1) {
+        // CRITICAL: block SYNCHRONOUSLY before onend fires
+        // This prevents the glitch loop where onend restarts
+        // the engine before sendMessage has a chance to block it
+        this.gotResult = true
+        this.blocked = true
+        this._destroy()
         this.onSpeech(text)
-        // block() will be called by sendMessage synchronously
-        // unblock() will restart listening after Nova responds
       }
     }
 
@@ -103,17 +105,18 @@ class SpeechEngine {
         this.onState('denied')
         return
       }
-      // no-speech, network, audio-capture — just restart
       if (this.active && !this.blocked) {
-        this.timer = setTimeout(() => this._listen(), 300)
+        this.timer = setTimeout(() => this._listen(), 400)
       }
     }
 
     rec.onend = () => {
-      // If we got a result, sendMessage called block() already — don't restart
-      // If no result (silence, timeout) — restart to keep listening
+      // gotResult=true means we already blocked synchronously in onresult
+      // Just wait for unblock() to restart
+      if (this.gotResult) return
+      // No result — restart to keep listening
       if (this.active && !this.blocked) {
-        this.timer = setTimeout(() => this._listen(), 200)
+        this.timer = setTimeout(() => this._listen(), 250)
       }
     }
 
@@ -122,7 +125,7 @@ class SpeechEngine {
       rec.start()
     } catch (_) {
       if (this.active && !this.blocked) {
-        this.timer = setTimeout(() => this._listen(), 500)
+        this.timer = setTimeout(() => this._listen(), 600)
       }
     }
   }
