@@ -16,10 +16,10 @@ async function apiFetch(path, method = 'GET', body) {
 
 function AdminSidebar({ active, setActive, firstName, signOut, onClose }) {
   const items = [
-    { id: 'overview', label: 'Overview' },
-    { id: 'tutors', label: 'Manage Tutors' },
-    { id: 'groups', label: 'Groups & Assignment' },
-    { id: 'grouping', label: 'Run AI Grouping' },
+    { id: 'overview', label: 'Overview',  },
+    { id: 'tutors', label: 'Manage Tutors',  },
+    { id: 'groups', label: 'Groups & Assignment',  },
+    { id: 'grouping', label: 'Run AI Grouping',  },
   ]
   return (
     <>

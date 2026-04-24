@@ -144,7 +144,7 @@ export default function FaceRecognition({ onRecognised, onUnknown, active }) {
 
       {/* Status overlay */}
       <div style={{ position:'absolute', top:8, left:8, background:'rgba(0,0,0,0.7)', borderRadius:99, padding:'3px 10px', fontSize:10, color:'rgba(255,255,255,0.7)', backdropFilter:'blur(8px)', textTransform:'uppercase', letterSpacing:'0.06em', fontFamily:'sans-serif' }}>
-        {status === 'loading' ? 'Loading...' : status === 'error' ? 'No camera' : status === 'running' ? '◉ Watching' : '○ Off'}
+        {status === 'loading' ? ' Loading...' : status === 'error' ? 'No camera' : status === 'running' ? '◉ Watching' : '○ Off'}
       </div>
 
       {/* Recognition result */}

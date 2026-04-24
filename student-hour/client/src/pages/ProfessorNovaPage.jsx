@@ -1,24 +1,30 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
-import { Link } from 'react-router-dom'
-import { useAuth } from '../hooks/useAuth.jsx'
-import { useGroup } from '../hooks/useGroup.js'
-import { supabase } from '../lib/supabase.js'
-import NovaAvatar from '../components/NovaAvatar.jsx'
+// ═══════════════════════════════════════════════════════════════════
+// SPEECH ENGINE v5 — Bulletproof mobile + desktop listener
+//
+// ROOT CAUSE of mobile deafness:
+//   1. continuous:true is silently ignored on Android Chrome/iOS
+//   2. After onresult fires and block() is called, onend fires
+//      while blocked=true, so the "restart" branch is skipped.
+//      unblock() then tries to restart but the timing is wrong.
+//   3. isMobile detection can fail if Chrome is in "desktop mode"
+//
+// FIXES:
+//   - Always use continuous:false on ALL platforms (safer)
+//   - Use a pending restart flag instead of checking blocked in onend
+//   - Restart is always scheduled from unblock(), never from onend
+//     when a result was received
+//   - 2s silence buffer for desktop via repeated restarts
+// ═══════════════════════════════════════════════════════════════════
 
-// ═══════════════════════════════════════════════════
-// PERSISTENT SPEECH ENGINE
-// The core problem: Web Speech API stops after ~60s
-// or after silence. This engine never stops — it
-// restarts itself immediately every time it ends.
-// ═══════════════════════════════════════════════════
-// ═══════════════════════════════════════════════════════════════════
-// SPEECH ENGINE v4 — Mobile-aware dual-mode listener
-// MOBILE: continuous:false, sends immediately, no silence timer
-// DESKTOP: continuous:true, 1.8s silence buffer before sending
-// ═══════════════════════════════════════════════════════════════════
-const isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(
-  typeof navigator !== 'undefined' ? navigator.userAgent : ''
-)
+// Detect if browser supports continuous mode reliably
+// Android Chrome and iOS Safari both have issues with continuous:true
+function supportsContinuous() {
+  const ua = navigator.userAgent || ''
+  const isAndroid = /Android/i.test(ua)
+  const isIOS = /iPhone|iPad|iPod/i.test(ua)
+  const isSafari = /^((?!chrome|android).)*safari/i.test(ua)
+  return !isAndroid && !isIOS && !isSafari
+}
 
 class SpeechEngine {
   constructor({ onSpeech, onInterim, onState }) {
@@ -30,132 +36,198 @@ class SpeechEngine {
     this.rec = null
     this.restartTimer = null
     this.silenceTimer = null
-    this.buffer = ''
-    this.SILENCE_MS = 1800
-    this.gotResult = false
+    this.desktopBuffer = ''
+    this.pendingRestart = false  // set when we got result and are waiting for unblock
+    this.continuous = supportsContinuous()
+    this.SILENCE_MS = 1600
   }
 
-  start() { this.active = true; this.buffer = ''; this._boot() }
+  start() {
+    this.active = true
+    this.desktopBuffer = ''
+    this.pendingRestart = false
+    this._boot()
+  }
 
-  stop() { this.active = false; this.buffer = ''; this._kill(); this.onState('idle') }
+  stop() {
+    this.active = false
+    this.desktopBuffer = ''
+    this.pendingRestart = false
+    this._kill()
+    this.onState('idle')
+  }
 
+  // Called by sendMessage before API call — stops listening while Nova responds
   block() {
     this.blocked = true
     clearTimeout(this.silenceTimer)
     clearTimeout(this.restartTimer)
-    this.buffer = ''
+    this.desktopBuffer = ''
     this._kill()
   }
 
+  // Called after Nova finishes speaking — restarts listening
   unblock() {
     this.blocked = false
-    if (this.active) this.restartTimer = setTimeout(() => this._boot(), isMobile ? 500 : 600)
+    this.pendingRestart = false
+    if (this.active) {
+      this.restartTimer = setTimeout(() => this._boot(), 600)
+    }
   }
 
   _kill() {
     clearTimeout(this.restartTimer)
     clearTimeout(this.silenceTimer)
-    try { this.rec?.abort() } catch (_) {}
-    try { this.rec?.stop() } catch (_) {}
-    this.rec = null
+    if (this.rec) {
+      try { this.rec.abort() } catch (_) {}
+      try { this.rec.stop() } catch (_) {}
+      this.rec = null
+    }
   }
 
   _boot() {
     if (!this.active || this.blocked) return
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-    if (!SR) return
     this._kill()
-    this.gotResult = false
+    this.pendingRestart = false
+
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SR) {
+      this.onState('unsupported')
+      return
+    }
 
     const rec = new SR()
+    rec.lang = 'en-US'
+    rec.maxAlternatives = 3      // more alternatives = better accent handling
 
-    if (isMobile) {
-      // MOBILE: single-shot mode — works on Android Chrome + iOS Safari
-      rec.continuous = false
-      rec.interimResults = false
-      rec.lang = 'en-US'
-      rec.maxAlternatives = 3
-
-      rec.onstart = () => this.onState('listening')
-
-      rec.onresult = (e) => {
-        this.gotResult = true
-        // Pick highest-confidence alternative
-        let best = '', bestConf = -1
-        for (let i = 0; i < e.results.length; i++) {
-          for (let j = 0; j < e.results[i].length; j++) {
-            const conf = e.results[i][j].confidence || 0.5
-            if (conf > bestConf) { bestConf = conf; best = e.results[i][j].transcript }
-          }
-        }
-        const text = best.trim()
-        if (text.length > 1) {
-          this.onInterim('')
-          // Send immediately — don't wait
-          this.onSpeech(text)
-          // block() will be called by sendMessage; unblock() restarts us
-        }
-      }
-
-      rec.onerror = (e) => {
-        this.onInterim('')
-        if (e.error === 'not-allowed') { this.active = false; this.onState('denied'); return }
-        if (this.active && !this.blocked) this.restartTimer = setTimeout(() => this._boot(), 700)
-      }
-
-      rec.onend = () => {
-        this.onInterim('')
-        // If we got a result, sendMessage handles restart via unblock()
-        // If we didn't (silence/timeout), restart ourselves
-        if (!this.gotResult && this.active && !this.blocked) {
-          this.restartTimer = setTimeout(() => this._boot(), 400)
-        } else if (!this.active || this.blocked) {
-          this.onState('idle')
-        }
-      }
-
-    } else {
-      // DESKTOP: continuous mode with silence buffer
+    if (this.continuous) {
+      // ── DESKTOP: continuous mode, silence buffer ──────────────
       rec.continuous = true
       rec.interimResults = true
-      rec.lang = 'en-US'
-      rec.maxAlternatives = 1
 
-      rec.onstart = () => this.onState('listening')
+      rec.onstart = () => {
+        if (!this.blocked) this.onState('listening')
+      }
 
       rec.onresult = (e) => {
         let newFinal = '', interim = ''
         for (let i = e.resultIndex; i < e.results.length; i++) {
-          if (e.results[i].isFinal) newFinal += e.results[i][0].transcript
-          else interim += e.results[i][0].transcript
+          if (e.results[i].isFinal) {
+            // Pick best alternative
+            let best = '', bestConf = -1
+            for (let j = 0; j < e.results[i].length; j++) {
+              if ((e.results[i][j].confidence || 0.5) > bestConf) {
+                bestConf = e.results[i][j].confidence || 0.5
+                best = e.results[i][j].transcript
+              }
+            }
+            newFinal += best
+          } else {
+            interim += e.results[i][0].transcript
+          }
         }
-        if (newFinal) { this.buffer += ' ' + newFinal; this.buffer = this.buffer.trim() }
+        if (newFinal) {
+          this.desktopBuffer += ' ' + newFinal
+          this.desktopBuffer = this.desktopBuffer.trim()
+        }
         this.onInterim(interim)
         clearTimeout(this.silenceTimer)
-        if (this.buffer.split(' ').length >= 2) {
+        if (this.desktopBuffer.split(' ').length >= 2) {
           this.silenceTimer = setTimeout(() => {
-            const text = this.buffer.trim(); this.buffer = ''; this.onInterim('')
-            if (text.length > 3) this.onSpeech(text)
+            const text = this.desktopBuffer.trim()
+            this.desktopBuffer = ''
+            this.onInterim('')
+            if (text.length > 3) {
+              this.pendingRestart = true
+              this.onSpeech(text)
+            }
           }, this.SILENCE_MS)
         }
       }
 
       rec.onerror = (e) => {
-        if (['no-speech','audio-capture','network'].includes(e.error)) {
-          if (this.active && !this.blocked) this.restartTimer = setTimeout(() => this._boot(), 400)
+        if (['no-speech', 'audio-capture', 'network'].includes(e.error)) {
+          if (this.active && !this.blocked) {
+            this.restartTimer = setTimeout(() => this._boot(), 400)
+          }
         }
       }
 
       rec.onend = () => {
-        if (this.active && !this.blocked) this.restartTimer = setTimeout(() => this._boot(), 250)
-        else this.onState('idle')
+        if (this.active && !this.blocked && !this.pendingRestart) {
+          this.restartTimer = setTimeout(() => this._boot(), 250)
+        }
+      }
+
+    } else {
+      // ── MOBILE: single-shot mode — Android Chrome + iOS Safari ──
+      rec.continuous = false
+      rec.interimResults = false
+
+      rec.onstart = () => {
+        if (!this.blocked) this.onState('listening')
+      }
+
+      rec.onresult = (e) => {
+        // Pick highest-confidence result across all alternatives
+        let best = '', bestConf = -1
+        for (let i = 0; i < e.results.length; i++) {
+          for (let j = 0; j < e.results[i].length; j++) {
+            const conf = e.results[i][j].confidence || 0.5
+            if (conf > bestConf) {
+              bestConf = conf
+              best = e.results[i][j].transcript
+            }
+          }
+        }
+        const text = best.trim()
+        if (text.length > 1) {
+          this.pendingRestart = true
+          this.onInterim('')
+          this.onSpeech(text)
+          // DO NOT restart here — block() will be called by sendMessage
+          // unblock() will restart after Nova responds
+        }
+      }
+
+      rec.onerror = (e) => {
+        this.onInterim('')
+        if (e.error === 'not-allowed') {
+          this.active = false
+          this.onState('denied')
+          return
+        }
+        // On no-speech or network error, restart after short delay
+        if (this.active && !this.blocked) {
+          this.restartTimer = setTimeout(() => this._boot(), 600)
+        }
+      }
+
+      rec.onend = () => {
+        this.onInterim('')
+        // Key fix: if pendingRestart=true, a result was received.
+        // Don't restart — block()+unblock() from sendMessage handles it.
+        // If pendingRestart=false, no result — restart ourselves.
+        if (!this.pendingRestart && this.active && !this.blocked) {
+          this.restartTimer = setTimeout(() => this._boot(), 400)
+        } else if (this.pendingRestart && this.blocked) {
+          // Waiting for sendMessage to call unblock() — do nothing
+        } else if (!this.active) {
+          this.onState('idle')
+        }
       }
     }
 
     this.rec = rec
-    try { rec.start() } catch (_) { this.restartTimer = setTimeout(() => this._boot(), 1000) }
+    try {
+      rec.start()
+    } catch (err) {
+      // InvalidStateError means already started — retry after delay
+      this.restartTimer = setTimeout(() => this._boot(), 1000)
+    }
   }
 }
+
 
 // TTS — deep professor voice
 // ═══════════════════════════════════════════════════
@@ -453,7 +525,7 @@ export default function ProfessorNovaPage() {
 
           {/* Voice toggle */}
           <button className="nova-btn" onClick={() => { setVoiceOn(v=>!v); if(novaState==='speaking'){window.speechSynthesis?.cancel();setNovaState('idle');engineRef.current?.unblock()} }} style={{ background: voiceOn?'rgba(245,200,66,0.1)':'rgba(255,255,255,0.05)', border:`1px solid ${voiceOn?'rgba(245,200,66,0.25)':'rgba(255,255,255,0.08)'}`, borderRadius:99, padding:'5px 10px', fontSize:10, color: voiceOn?'#f5c842':'rgba(255,255,255,0.3)' }}>
-            {voiceOn ? '' : ''}
+            {voiceOn ? 'On' : 'Off'}
           </button>
 
           {/* Face recognition */}
@@ -520,7 +592,7 @@ export default function ProfessorNovaPage() {
         {!boardVisible && messages.length === 0 && novaState === 'idle' && (
           <div style={{ textAlign:'center', padding:'0 32px', zIndex:10 }}>
             <div style={{ fontSize:13, color:'rgba(255,255,255,0.25)', lineHeight:1.8 }}>
-              {micOn ? 'Just speak — I\'m listening' : 'Tap  to start talking to me'}
+              {micOn ? 'Just speak — I\'m listening' : 'Tap Mic to start talking to me'}
             </div>
             {micOn && <div style={{ marginTop:8, fontSize:11, color:'rgba(100,200,255,0.35)' }}>◉ microphone active</div>}
           </div>
@@ -546,7 +618,7 @@ export default function ProfessorNovaPage() {
         {/* Big mic button */}
         <button className="nova-btn" onClick={toggleMic} style={{ width:64, height:64, borderRadius:'50%', background: micOn?'rgba(100,200,255,0.2)':'rgba(255,255,255,0.08)', border:`2px solid ${micOn?'#64c8ff':'rgba(255,255,255,0.15)'}`, fontSize:24, display:'flex', alignItems:'center', justifyContent:'center', backdropFilter:'blur(12px)', position:'relative' }}>
           {micOn && <div style={{ position:'absolute', inset:-6, borderRadius:'50%', border:'2px solid rgba(100,200,255,0.4)', animation:'nv-ring1 2s ease-out infinite' }} />}
-          
+          Mic
         </button>
 
         {/* Stop speaking */}

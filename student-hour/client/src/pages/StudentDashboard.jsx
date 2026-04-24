@@ -14,11 +14,11 @@ async function apiFetch(path, method='GET', body) {
 
 function Sidebar({ active, setActive, firstName, signOut, group, onClose }) {
   const items = [
-    {id:'chat',label:'Group Chat',icon:''},
-    {id:'courses',label:'My Courses',icon:''},
-    {id:'tasks',label:'My Tasks',icon:''},
-    {id:'resources',label:'Resources',icon:''},
-    {id:'schedule',label:'Study Schedule',icon:''},
+    {id:'chat',label:'Group Chat',},
+    {id:'courses',label:'My Courses',},
+    {id:'tasks',label:'My Tasks',},
+    {id:'resources',label:'Resources',},
+    {id:'schedule',label:'Study Schedule',},
   ]
   return (
     <>
@@ -41,7 +41,7 @@ function Sidebar({ active, setActive, firstName, signOut, group, onClose }) {
         ))}
         <div style={{margin:'10px 0',borderTop:'1px solid rgba(255,255,255,0.08)',paddingTop:10}}>
           <Link to="/dashboard/nova" onClick={onClose} style={{display:'flex',alignItems:'center',gap:10,padding:'11px 12px',borderRadius:'var(--radius-md)',fontSize:14,background:'rgba(245,200,66,0.1)',color:'var(--yellow-300)',border:'1px solid rgba(245,200,66,0.2)',textDecoration:'none'}}>
-            <span style={{fontSize:15}}></span> Professor Nova
+             Professor Nova
           </Link>
         </div>
       </nav>
@@ -126,7 +126,7 @@ function CoursesView({studentId}) {
           These courses are what Professor Nova uses to teach you. Keep them updated — the more specific your struggles, the better Nova can help.
         </p>
         <button onClick={()=>setShowAdd(v=>!v)} className="btn-accent" style={{padding:'8px 16px',fontSize:13,flexShrink:0}}>
-          {showAdd?'Cancel':'Add course'}
+          {showAdd?'× Cancel':'+ Add course'}
         </button>
       </div>
 
@@ -236,7 +236,7 @@ function ScheduleView() {
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16,flexWrap:'wrap',gap:10}}>
         <p style={{fontSize:13,color:'var(--text-secondary)'}}>Your personalised 7-day study plan.</p>
         <button onClick={generate} className="btn-accent" style={{padding:'9px 16px',fontSize:13}} disabled={generating}>
-          {generating?'Generating...':schedule?'Regenerate':'Generate schedule'}
+          {generating?'Generating...':schedule?'↻ Regenerate':'Generate schedule'}
         </button>
       </div>
       {error&&<div style={{background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:8,padding:'10px 14px',fontSize:13,color:'#c0392b',marginBottom:14}}>{error}</div>}
