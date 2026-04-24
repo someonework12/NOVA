@@ -25,7 +25,6 @@ class SpeechEngine {
     this.blocked = false
     this.rec = null
     this.timer = null
-    this.gotResult = false  // tracks if current session produced a result
   }
 
   start() {
@@ -47,7 +46,8 @@ class SpeechEngine {
   unblock() {
     this.blocked = false
     if (this.active) {
-      this.timer = setTimeout(() => this._listen(), 900)
+      // Small delay so Nova's TTS audio fully stops before mic opens
+      this.timer = setTimeout(() => this._listen(), 800)
     }
   }
 
@@ -56,46 +56,44 @@ class SpeechEngine {
     try { this.rec?.abort() } catch (_) {}
     try { this.rec?.stop() } catch (_) {}
     this.rec = null
-    this.gotResult = false
   }
 
   _listen() {
     if (!this.active || this.blocked) return
     this._destroy()
-    this.gotResult = false
 
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition
     if (!SR) return
 
     const rec = new SR()
-    rec.continuous = false
-    rec.interimResults = false
+    rec.continuous = false      // works on ALL browsers including Android Chrome
+    rec.interimResults = false  // only final results — cleaner, more reliable
     rec.lang = 'en-US'
-    rec.maxAlternatives = 5
+    rec.maxAlternatives = 5     // pick best from 5 alternatives — helps with accents
 
     rec.onstart = () => {
       if (!this.blocked) this.onState('listening')
     }
 
     rec.onresult = (e) => {
-      // Pick highest-confidence alternative
-      let best = '', bestConf = -1
+      // Find the result with highest confidence across all alternatives
+      let best = ''
+      let bestConf = -1
       for (let i = 0; i < e.results.length; i++) {
         for (let j = 0; j < e.results[i].length; j++) {
           const r = e.results[i][j]
           const conf = r.confidence > 0 ? r.confidence : 0.5
-          if (conf > bestConf) { bestConf = conf; best = r.transcript }
+          if (conf > bestConf) {
+            bestConf = conf
+            best = r.transcript
+          }
         }
       }
       const text = best.trim()
       if (text.length > 1) {
-        // CRITICAL: block SYNCHRONOUSLY before onend fires
-        // This prevents the glitch loop where onend restarts
-        // the engine before sendMessage has a chance to block it
-        this.gotResult = true
-        this.blocked = true
-        this._destroy()
         this.onSpeech(text)
+        // block() will be called by sendMessage synchronously
+        // unblock() will restart listening after Nova responds
       }
     }
 
@@ -105,18 +103,17 @@ class SpeechEngine {
         this.onState('denied')
         return
       }
+      // no-speech, network, audio-capture — just restart
       if (this.active && !this.blocked) {
-        this.timer = setTimeout(() => this._listen(), 400)
+        this.timer = setTimeout(() => this._listen(), 300)
       }
     }
 
     rec.onend = () => {
-      // gotResult=true means we already blocked synchronously in onresult
-      // Just wait for unblock() to restart
-      if (this.gotResult) return
-      // No result — restart to keep listening
+      // If we got a result, sendMessage called block() already — don't restart
+      // If no result (silence, timeout) — restart to keep listening
       if (this.active && !this.blocked) {
-        this.timer = setTimeout(() => this._listen(), 250)
+        this.timer = setTimeout(() => this._listen(), 200)
       }
     }
 
@@ -125,7 +122,7 @@ class SpeechEngine {
       rec.start()
     } catch (_) {
       if (this.active && !this.blocked) {
-        this.timer = setTimeout(() => this._listen(), 600)
+        this.timer = setTimeout(() => this._listen(), 500)
       }
     }
   }
@@ -144,30 +141,26 @@ function getVoice() {
   return voices.find(v => v.lang?.startsWith('en') && !v.name.toLowerCase().includes('female') && !v.name.toLowerCase().includes('zira') && !v.name.toLowerCase().includes('hazel')) || voices.find(v => v.lang?.startsWith('en')) || null
 }
 
-function speakNova(text, onDone) {
+function speakNova(text, onDone, speakingRef) {
   if (!window.speechSynthesis) { onDone?.(); return }
   window.speechSynthesis.cancel()
-  const utt = new SpeechSynthesisUtterance(text)
-  utt.rate = 0.85; utt.pitch = 0.72; utt.volume = 1
   const voice = getVoice()
-  if (voice) utt.voice = voice
-  utt.onend = onDone; utt.onerror = onDone
-  // Chrome bug: speech stops after ~15s. Split long text.
-  if (text.length > 200) {
-    const parts = text.match(/[^.!?]+[.!?]*/g) || [text]
-    let i = 0
-    function speakNext() {
-      if (i >= parts.length) { onDone?.(); return }
-      const u = new SpeechSynthesisUtterance(parts[i++])
-      u.rate = 0.85; u.pitch = 0.72; u.volume = 1
-      if (voice) u.voice = voice
-      u.onend = speakNext; u.onerror = speakNext
-      window.speechSynthesis.speak(u)
-    }
-    speakNext()
-    return
+  // Always split into sentences — handles Chrome 15s bug AND enables mid-sentence interruption
+  const parts = text.match(/[^.!?]+[.!?]*/g) || [text]
+  let i = 0
+  function speakNext() {
+    // Check if interrupted — speakingRef.current set to false by interruptNova()
+    if (speakingRef && speakingRef.current === false) { onDone?.(); return }
+    if (i >= parts.length) { onDone?.(); return }
+    const chunk = parts[i++].trim()
+    if (!chunk) { speakNext(); return }
+    const u = new SpeechSynthesisUtterance(chunk)
+    u.rate = 0.85; u.pitch = 0.72; u.volume = 1
+    if (voice) u.voice = voice
+    u.onend = speakNext; u.onerror = speakNext
+    window.speechSynthesis.speak(u)
   }
-  window.speechSynthesis.speak(utt)
+  speakNext()
 }
 
 // ═══════════════════════════════════════════════════
@@ -221,6 +214,8 @@ export default function ProfessorNovaPage() {
   const messagesRef = useRef([])
   const voiceOnRef = useRef(true)
   const bottomRef = useRef(null)
+  const greetedRef = useRef(false)
+  const speakingRef = useRef(false)
 
   useEffect(() => { messagesRef.current = messages }, [messages])
   useEffect(() => { loadingRef.current = loading }, [loading])
@@ -235,7 +230,11 @@ export default function ProfessorNovaPage() {
     }
 
     const engine = new SpeechEngine({
-      onSpeech: (text) => sendMessage(text),
+      onSpeech: (text) => {
+        // Allow speaking while Nova is mid-response (interruption)
+        // Don't gate on loadingRef here — sendMessage handles that
+        sendMessage(text)
+      },
       onState: (state) => {
         if (state === 'listening' && !loadingRef.current) setNovaState('listening')
         else if (state === 'idle' && !loadingRef.current) setNovaState('idle')
@@ -254,22 +253,49 @@ export default function ProfessorNovaPage() {
         setNovaState('speaking')
         speakNova(
           'Hello ' + name + '. I am Professor Nova. I am listening — speak to me naturally.',
-          () => { setNovaState('idle'); engine.unblock() }
+          () => { setNovaState('idle'); engine.unblock() },
+          speakingRef
         )
       }
     }, 1000)
 
+    // Keep-alive ping every 4 minutes to prevent Render cold start 504s
+    const keepAlive = setInterval(async () => {
+      try { await fetch('/api/health') } catch(_) {}
+    }, 4 * 60 * 1000)
+
     return () => {
       clearTimeout(t1); clearTimeout(t2)
+      clearInterval(keepAlive)
       engine.stop()
       window.speechSynthesis?.cancel()
     }
   }, [])
 
+  // ── INTERRUPT NOVA (called when student speaks while Nova is talking)
+  function interruptNova() {
+    if (speakingRef.current) {
+      window.speechSynthesis?.cancel()
+      speakingRef.current = false
+      setNovaState('idle')
+      setBoardVisible(false)
+    }
+  }
+
   // ── SEND MESSAGE ──────────────────────────────────────────────
   const sendMessage = useCallback(async (text) => {
     const clean = text?.trim()
-    if (!clean || loadingRef.current) return
+    if (!clean) return
+
+    // INTERRUPTION: if Nova is speaking, stop her immediately
+    // This makes it feel like a real conversation — student can cut in anytime
+    if (speakingRef.current) {
+      window.speechSynthesis?.cancel()
+      speakingRef.current = false
+    }
+
+    // If already loading a response, don't stack another one
+    if (loadingRef.current) return
 
     engineRef.current?.block()
     const userMsg = { role: 'user', content: clean }
@@ -301,12 +327,14 @@ export default function ProfessorNovaPage() {
       setBoardVisible(true)
 
       if (voiceOnRef.current) {
+        speakingRef.current = true
         setNovaState('speaking')
         speakNova(reply, () => {
+          speakingRef.current = false
           setNovaState('idle')
           setBoardVisible(false)
           engineRef.current?.unblock()
-        })
+        }, speakingRef)
       } else {
         setNovaState('idle')
         engineRef.current?.unblock()
@@ -314,6 +342,7 @@ export default function ProfessorNovaPage() {
     } catch (err) {
       setError(err.message)
       setNovaState('idle')
+      speakingRef.current = false
       engineRef.current?.unblock()
     } finally {
       setLoading(false)
