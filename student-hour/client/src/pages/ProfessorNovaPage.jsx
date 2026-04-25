@@ -25,6 +25,7 @@ class SpeechEngine {
     this.blocked = false
     this.rec = null
     this.timer = null
+    this.speaking = false  // true while Nova's TTS is playing
   }
 
   start() {
@@ -34,45 +35,56 @@ class SpeechEngine {
 
   stop() {
     this.active = false
-    this._destroy()
+    this.blocked = false
+    this._kill()
     this.onState('idle')
   }
 
+  // Called while waiting for API response — truly deaf
   block() {
     this.blocked = true
-    this._destroy()
+    this._kill()
   }
 
-  unblock() {
+  // Called when API response received and TTS starts
+  // Engine listens during TTS so student can interrupt
+  unblockForSpeaking() {
     this.blocked = false
-    if (this.active) {
-      // Small delay so Nova's TTS audio fully stops before mic opens
-      this.timer = setTimeout(() => this._listen(), 800)
-    }
+    this.speaking = true
+    this._kill()
+    // Short delay to avoid picking up Nova's own voice
+    this.timer = setTimeout(() => this._listen(), 400)
   }
 
-  _destroy() {
+  // Called when TTS finishes naturally
+  unblockAfterSpeaking() {
+    this.blocked = false
+    this.speaking = false
+    this._kill()
+    this.timer = setTimeout(() => this._listen(), 200)
+  }
+
+  _kill() {
     clearTimeout(this.timer)
     try { this.rec?.abort() } catch (_) {}
-    try { this.rec?.stop() } catch (_) {}
     this.rec = null
   }
 
   _listen() {
     if (!this.active || this.blocked) return
-    this._destroy()
+    this._kill()
 
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition
     if (!SR) return
 
     const rec = new SR()
-    rec.continuous = false      // works on ALL browsers including Android Chrome
-    rec.interimResults = false  // only final results — cleaner, more reliable
+    rec.continuous = false
+    rec.interimResults = false
     rec.lang = 'en-US'
-    rec.maxAlternatives = 5     // pick best from 5 alternatives — helps with accents
+    rec.maxAlternatives = 5
 
     rec.onstart = () => {
-      if (!this.blocked) this.onState('listening')
+      this.onState('listening')
     }
 
     rec.onresult = (e) => {
@@ -86,14 +98,11 @@ class SpeechEngine {
       }
       const text = best.trim()
       if (text.length > 1) {
-        // Block synchronously NOW — before onend fires.
-        // sendMessage is async so its block() call is too late.
-        // onend fires immediately after onresult in the same event loop.
-        // If blocked=false when onend runs, the engine restarts and flickers.
+        // Block synchronously before onend fires — prevents restart loop
         this.blocked = true
-        this._destroy()
+        this.speaking = false
+        this._kill()
         this.onSpeech(text)
-        // unblock() is called by sendMessage after Nova finishes responding
       }
     }
 
@@ -103,16 +112,16 @@ class SpeechEngine {
         this.onState('denied')
         return
       }
+      // Any other error — restart quickly
       if (this.active && !this.blocked) {
-        this.timer = setTimeout(() => this._listen(), 400)
+        this.timer = setTimeout(() => this._listen(), 300)
       }
     }
 
     rec.onend = () => {
-      // blocked=true: we got speech, waiting for unblock() after Nova responds
-      // blocked=false: silence/timeout, restart to keep listening
+      // Only restart if not blocked (no result was captured)
       if (this.active && !this.blocked) {
-        this.timer = setTimeout(() => this._listen(), 300)
+        this.timer = setTimeout(() => this._listen(), 200)
       }
     }
 
@@ -121,7 +130,7 @@ class SpeechEngine {
       rec.start()
     } catch (_) {
       if (this.active && !this.blocked) {
-        this.timer = setTimeout(() => this._listen(), 500)
+        this.timer = setTimeout(() => this._listen(), 400)
       }
     }
   }
@@ -236,13 +245,12 @@ export default function ProfessorNovaPage() {
         if (sendMessageRef.current) sendMessageRef.current(text)
       },
       onState: (state) => {
-        if (state === 'listening' && !loadingRef.current) {
-          // Show listening state — but only if Nova isn't currently speaking
-          // (we listen while Nova speaks to enable interruption)
-          if (!speakingRef.current) setNovaState('listening')
+        if (state === 'listening') {
+          // Show listening even during Nova's speech (enables interruption awareness)
+          if (!loadingRef.current) setNovaState(s => s === 'speaking' ? 'speaking' : 'listening')
         }
-        else if (state === 'idle' && !loadingRef.current && !speakingRef.current) {
-          setNovaState('idle')
+        else if (state === 'idle' && !loadingRef.current) {
+          setNovaState(s => s === 'speaking' ? 'speaking' : 'idle')
         }
         else if (state === 'denied') {
           setError('Microphone access denied. Allow microphone in browser settings then refresh.')
@@ -348,25 +356,24 @@ export default function ProfessorNovaPage() {
       if (voiceOnRef.current) {
         speakingRef.current = true
         setNovaState('speaking')
-        // Unblock the engine NOW so student can interrupt while Nova speaks
-        // The engine listens — if student speaks, sendMessage cancels TTS
-        // and processes the interruption immediately
-        engineRef.current?.unblock()
+        // Unblock engine so student can interrupt during Nova's speech
+        engineRef.current?.unblockForSpeaking()
         speakNova(reply, () => {
-          // Nova finished speaking naturally (no interruption)
+          // Nova finished speaking naturally — no interruption
           speakingRef.current = false
-          setNovaState(s => s === 'speaking' ? 'idle' : s)
+          setNovaState('idle')
           setBoardVisible(false)
+          engineRef.current?.unblockAfterSpeaking()
         }, speakingRef)
       } else {
         setNovaState('idle')
-        engineRef.current?.unblock()
+        engineRef.current?.unblockAfterSpeaking()
       }
     } catch (err) {
       setError(err.message)
       setNovaState('idle')
       speakingRef.current = false
-      engineRef.current?.unblock()
+      engineRef.current?.unblockAfterSpeaking()
     } finally {
       setLoading(false)
       loadingRef.current = false
@@ -415,7 +422,7 @@ export default function ProfessorNovaPage() {
               setNovaState('speaking')
               speakNova('I can see you, ' + name + '. Good to have you in class.', () => {
                 setNovaState('idle')
-                engineRef.current?.unblock()
+                engineRef.current?.unblockAfterSpeaking()
               })
               clearInterval(faceTimerRef.current)
             }
@@ -476,7 +483,7 @@ export default function ProfessorNovaPage() {
           </button>
 
           {/* Voice toggle */}
-          <button className="nova-btn" onClick={() => { setVoiceOn(v=>!v); if(novaState==='speaking'){window.speechSynthesis?.cancel();setNovaState('idle');engineRef.current?.unblock()} }} style={{ background: voiceOn?'rgba(245,200,66,0.1)':'rgba(255,255,255,0.05)', border:`1px solid ${voiceOn?'rgba(245,200,66,0.25)':'rgba(255,255,255,0.08)'}`, borderRadius:99, padding:'5px 10px', fontSize:10, color: voiceOn?'#f5c842':'rgba(255,255,255,0.3)' }}>
+          <button className="nova-btn" onClick={() => { setVoiceOn(v=>!v); if(novaState==='speaking'){window.speechSynthesis?.cancel();speakingRef.current=false;setNovaState('idle');engineRef.current?.unblockAfterSpeaking()} }} style={{ background: voiceOn?'rgba(245,200,66,0.1)':'rgba(255,255,255,0.05)', border:`1px solid ${voiceOn?'rgba(245,200,66,0.25)':'rgba(255,255,255,0.08)'}`, borderRadius:99, padding:'5px 10px', fontSize:10, color: voiceOn?'#f5c842':'rgba(255,255,255,0.3)' }}>
             {voiceOn ? 'On' : 'Off'}
           </button>
 
@@ -575,7 +582,7 @@ export default function ProfessorNovaPage() {
 
         {/* Stop speaking */}
         {novaState === 'speaking' && (
-          <button className="nova-btn" onClick={()=>{ window.speechSynthesis?.cancel(); setNovaState('idle'); setBoardVisible(false); engineRef.current?.unblock() }} style={{ width:48, height:48, borderRadius:'50%', background:'rgba(220,38,38,0.15)', border:'1px solid rgba(220,38,38,0.3)', fontSize:16, display:'flex', alignItems:'center', justifyContent:'center', backdropFilter:'blur(12px)' }}>
+          <button className="nova-btn" onClick={()=>{ window.speechSynthesis?.cancel(); setNovaState('idle'); setBoardVisible(false); engineRef.current?.unblockAfterSpeaking() }} style={{ width:48, height:48, borderRadius:'50%', background:'rgba(220,38,38,0.15)', border:'1px solid rgba(220,38,38,0.3)', fontSize:16, display:'flex', alignItems:'center', justifyContent:'center', backdropFilter:'blur(12px)' }}>
             ■
           </button>
         )}
@@ -599,7 +606,7 @@ export default function ProfessorNovaPage() {
                 <div style={{ maxWidth:'80%', padding:'9px 12px', fontSize:13, lineHeight:1.65, whiteSpace:'pre-wrap', background:msg.role==='user'?'#7A3D14':'rgba(255,255,255,0.06)', color:msg.role==='user'?'#fff':'rgba(255,255,255,0.82)', borderRadius:msg.role==='user'?'12px 12px 3px 12px':'3px 12px 12px 12px', border:'1px solid rgba(255,255,255,0.06)' }}>
                   {msg.content}
                   {msg.role==='assistant' && voiceOn && (
-                    <button onClick={()=>{ setChatOpen(false); setNovaState('speaking'); setBoardText(msg.content); setBoardVisible(true); speakNova(msg.content,()=>{setNovaState('idle');setBoardVisible(false);engineRef.current?.unblock()}) }} style={{ display:'block', marginTop:4, background:'none', border:'none', fontSize:10, color:'rgba(255,255,255,0.2)', cursor:'pointer', padding:0, fontFamily:'sans-serif' }}>Replay</button>
+                    <button onClick={()=>{ setChatOpen(false); setNovaState('speaking'); setBoardText(msg.content); setBoardVisible(true); speakNova(msg.content,()=>{setNovaState('idle');setBoardVisible(false);engineRef.current?.unblockAfterSpeaking()}) }} style={{ display:'block', marginTop:4, background:'none', border:'none', fontSize:10, color:'rgba(255,255,255,0.2)', cursor:'pointer', padding:0, fontFamily:'sans-serif' }}>Replay</button>
                   )}
                 </div>
               </div>
