@@ -43,33 +43,33 @@ class NovaEar {
     this.onSpeech = onSpeech
     this.rec = null
     this.running = false
-    this.paused = false       // true while API call is in flight
-    this.novaSpeaking = false // true while Nova's TTS is playing
+    this.paused = false   // true only while API call in flight
     this.restartT = null
   }
 
+  // Start listening — call once
   open() {
     this.running = true
     this.paused = false
     this._start()
   }
 
+  // Pause during API call — results ignored even if picked up
   pause() { this.paused = true }
 
+  // Resume after API call — keep session alive, just unpause
   resume() {
     this.paused = false
+    // If session died while paused (mobile), restart it
     if (!this.rec && this.running) {
       this.restartT = setTimeout(() => this._start(), 300)
     }
   }
 
-  // Tell the ear Nova is now speaking so it can filter her own voice
-  setNovaSpeaking(val) { this.novaSpeaking = val }
-
+  // Full stop
   close() {
     this.running = false
     this.paused = false
-    this.novaSpeaking = false
     clearTimeout(this.restartT)
     this._kill()
   }
@@ -91,11 +91,15 @@ class NovaEar {
     rec.lang = 'en-US'
     rec.maxAlternatives = 3
     rec.interimResults = false
-    rec.continuous = !ON_MOBILE
+
+    if (ON_MOBILE) {
+      rec.continuous = false
+    } else {
+      rec.continuous = true
+    }
 
     rec.onresult = (e) => {
-      if (this.paused) return  // API in flight — drop
-
+      if (this.paused) return  // API in flight — ignore
       let best = '', bestConf = -1
       for (let i = e.resultIndex ?? 0; i < e.results.length; i++) {
         if (!e.results[i].isFinal && !ON_MOBILE) continue
@@ -105,41 +109,29 @@ class NovaEar {
         }
       }
       const text = best.trim()
-      if (!text || text.length < 2) return
-
-      // ── SELF-VOICE FILTER ──────────────────────────────────────────
-      // While Nova is speaking the mic stays open so YOU can interrupt.
-      // But Nova's own TTS audio leaks into the mic and gets recognised.
-      // Her echo has two tell-tale signs:
-      //   1. Short fragments — echo tends to be 1-2 words / <12 chars
-      //   2. Near-perfect confidence (>0.97) — browser hears its own
-      //      clean speaker output and recognises it perfectly
-      // A real student interruption is usually 3+ words and confidence
-      // drops because there's room noise, breathing, accent, etc.
-      // So: during Nova's speech, drop anything that looks like echo.
-      if (this.novaSpeaking) {
-        const wordCount = text.split(/\s+/).length
-        const tooShort = text.length < 12 || wordCount < 3
-        const looksLikeEcho = bestConf > 0.97
-        if (tooShort || looksLikeEcho) return  // drop — Nova's own voice
-        // Passes both checks — this is a real human interruption
+      if (text.length > 1) {
+        this.paused = true  // pause synchronously to prevent duplicate sends
+        this.onSpeech(text)
       }
-
-      this.paused = true  // prevent duplicate sends
-      this.onSpeech(text)
     }
 
     rec.onerror = (e) => {
       if (e.error === 'aborted') return
       if (e.error === 'not-allowed') { this.running = false; return }
+      // Any error: restart after delay
       if (this.running) this.restartT = setTimeout(() => this._start(), 800)
     }
 
     rec.onend = () => {
       if (!this.running) return
       if (ON_MOBILE) {
-        if (!this.paused) this.restartT = setTimeout(() => this._start(), 250)
+        // Mobile: restart after each phrase (normal single-shot behavior)
+        if (!this.paused) {
+          this.restartT = setTimeout(() => this._start(), 250)
+        }
+        // If paused: resume() will restart
       } else {
+        // Desktop continuous: should never end. If it does, restart.
         this.restartT = setTimeout(() => this._start(), 600)
       }
     }
@@ -229,7 +221,6 @@ export default function ProfessorNovaPage() {
     if (speakingRef.current) {
       window.speechSynthesis.cancel()
       speakingRef.current = false
-      earRef.current?.setNovaSpeaking(false)  // stop filtering — student is speaking
       setNovaState('idle')
       setBoardVisible(false)
     }
