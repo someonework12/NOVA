@@ -250,16 +250,8 @@ export default function ProfessorNovaPage() {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify(body)
       })
-      // Safe parse — a 504 from Render returns HTML not JSON, so never call
-      // res.json() blindly. Check ok first, then attempt JSON parse.
-      if (!res.ok) {
-        let errMsg = `Server error ${res.status}`
-        if (res.status === 504) errMsg = 'Professor Nova is waking up — please try again in a moment.'
-        else { try { const e = await res.json(); errMsg = e.error || errMsg } catch (_) {} }
-        throw new Error(errMsg)
-      }
-      let data
-      try { data = await res.json() } catch (_) { throw new Error('Bad response from server — please try again.') }
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || `Error ${res.status}`)
 
       const reply = data.reply
       setMessages(prev => [...prev, { role: 'assistant', content: reply }])
@@ -269,15 +261,13 @@ export default function ProfessorNovaPage() {
       if (voiceOnRef.current) {
         speakingRef.current = true
         setNovaState('speaking')
+        // Resume ear BEFORE speaking — so student can interrupt
+        earRef.current?.resume()
         speak(reply, () => {
           speakingRef.current = false
           setNovaState('idle')
           setBoardVisible(false)
-          // Resume ear only after Nova finishes speaking — prevents echo
-          earRef.current?.resume()
         }, speakingRef)
-        // Small delay before opening mic so Nova's voice doesn't echo back
-        setTimeout(() => { if (speakingRef.current) earRef.current?.resume() }, 350)
       } else {
         setNovaState('idle')
         earRef.current?.resume()
@@ -289,8 +279,6 @@ export default function ProfessorNovaPage() {
       earRef.current?.resume()
     } finally {
       setLoading(false); loadingRef.current = false
-      // Safety net — ear must NEVER stay paused after this function exits
-      if (earRef.current?.paused) earRef.current.resume()
     }
   }, [mode, group])
 
@@ -308,12 +296,10 @@ export default function ProfessorNovaPage() {
     })
     earRef.current = ear
 
-    // Wake Render immediately on page load, then ping every 13 min
-    // (Render free tier spins down after 15 min of inactivity)
-    fetch('/api/health').catch(() => {})
+    // Keep Render warm
     const keepAlive = setInterval(() => {
       fetch('/api/health').catch(() => {})
-    }, 13 * 60 * 1000)
+    }, 4 * 60 * 1000)
 
     // Greet then start listening
     const t = setTimeout(() => {
