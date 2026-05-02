@@ -43,33 +43,33 @@ class NovaEar {
     this.onSpeech = onSpeech
     this.rec = null
     this.running = false
-    this.active = false  // recognition should be running
+    this.paused = false       // true while API call is in flight
+    this.novaSpeaking = false // true while Nova's TTS is playing
     this.restartT = null
   }
 
   open() {
     this.running = true
-    this.active = true
+    this.paused = false
     this._start()
   }
 
-  // Fully STOP recognition — no echo possible when rec is not running
-  pause() {
-    this.active = false
-    clearTimeout(this.restartT)
-    this._kill()
-  }
+  pause() { this.paused = true }
 
-  // Restart recognition — student's turn to speak
   resume() {
-    if (!this.running) return
-    this.active = true
-    this._start()
+    this.paused = false
+    if (!this.rec && this.running) {
+      this.restartT = setTimeout(() => this._start(), 300)
+    }
   }
+
+  // Tell the ear Nova is now speaking so it can filter her own voice
+  setNovaSpeaking(val) { this.novaSpeaking = val }
 
   close() {
     this.running = false
-    this.active = false
+    this.paused = false
+    this.novaSpeaking = false
     clearTimeout(this.restartT)
     this._kill()
   }
@@ -80,7 +80,7 @@ class NovaEar {
   }
 
   _start() {
-    if (!this.running || !this.active) return
+    if (!this.running) return
     clearTimeout(this.restartT)
     this._kill()
 
@@ -94,7 +94,8 @@ class NovaEar {
     rec.continuous = !ON_MOBILE
 
     rec.onresult = (e) => {
-      if (!this.active) return
+      if (this.paused) return  // API in flight — drop
+
       let best = '', bestConf = -1
       for (let i = e.resultIndex ?? 0; i < e.results.length; i++) {
         if (!e.results[i].isFinal && !ON_MOBILE) continue
@@ -105,22 +106,36 @@ class NovaEar {
       }
       const text = best.trim()
       if (!text || text.length < 2) return
-      this.active = false  // prevent duplicate sends
+
+      // ── SELF-VOICE FILTER ──────────────────────────────────────────
+      // While Nova is speaking, the mic stays open so the browser can
+      // detect when YOU start speaking (which cancels the TTS).
+      // But we must not send Nova's own voice to the API.
+      //
+      // Strategy: while novaSpeaking is true, drop ALL recognised text.
+      // When you actually speak and interrupt Nova, sendMessage() runs
+      // first — it calls setNovaSpeaking(false) before this onresult
+      // fires again. So your real words always get through on the next
+      // recognition cycle after the interruption clears the flag.
+      //
+      // This is simpler and more reliable than heuristics (length/conf)
+      // which were blocking real short interruptions like "stop", "wait".
+      if (this.novaSpeaking) return  // Nova is speaking — drop all, wait for interrupt
+
+      this.paused = true  // prevent duplicate sends
       this.onSpeech(text)
     }
 
     rec.onerror = (e) => {
       if (e.error === 'aborted') return
       if (e.error === 'not-allowed') { this.running = false; return }
-      if (this.running && this.active) {
-        this.restartT = setTimeout(() => this._start(), 800)
-      }
+      if (this.running) this.restartT = setTimeout(() => this._start(), 800)
     }
 
     rec.onend = () => {
-      if (!this.running || !this.active) return
+      if (!this.running) return
       if (ON_MOBILE) {
-        this.restartT = setTimeout(() => this._start(), 250)
+        if (!this.paused) this.restartT = setTimeout(() => this._start(), 250)
       } else {
         this.restartT = setTimeout(() => this._start(), 600)
       }
@@ -173,72 +188,6 @@ function speak(text, onDone, cancelRef) {
 // ─────────────────────────────────────────────────────────────────
 // COMPONENT
 // ─────────────────────────────────────────────────────────────────
-
-// ─────────────────────────────────────────────────────────────────
-// VOICE ACTIVITY DETECTOR
-// Watches raw mic volume via AudioContext. When YOUR voice crosses
-// the threshold while Nova speaks, fires onVoiceDetected to
-// trigger interruption. Completely separate from SpeechRecognition
-// so no echo conflict at all.
-// ─────────────────────────────────────────────────────────────────
-class VoiceActivityDetector {
-  constructor(onVoiceDetected) {
-    this.onVoiceDetected = onVoiceDetected
-    this.ctx = null; this.analyser = null; this.stream = null
-    this.rafId = null; this.active = false; this.triggered = false
-    this.aboveStart = null
-    this.THRESHOLD = 18   // RMS 0-255. 18 = clear speech, ignores background noise
-    this.HOLD_MS = 120    // must stay above threshold for 120ms — avoids click triggers
-  }
-
-  async start() {
-    if (this.ctx) return
-    try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true }
-      })
-      this.ctx = new (window.AudioContext || window.webkitAudioContext)()
-      const source = this.ctx.createMediaStreamSource(this.stream)
-      this.analyser = this.ctx.createAnalyser()
-      this.analyser.fftSize = 512
-      source.connect(this.analyser)
-      this._poll()
-    } catch (_) { /* mic not available — VAD disabled silently */ }
-  }
-
-  arm()   { this.active = true;  this.triggered = false; this.aboveStart = null }
-  disarm(){ this.active = false; this.triggered = false; this.aboveStart = null }
-
-  stop() {
-    this.active = false
-    cancelAnimationFrame(this.rafId)
-    try { this.stream?.getTracks().forEach(t => t.stop()) } catch (_) {}
-    try { this.ctx?.close() } catch (_) {}
-    this.ctx = null
-  }
-
-  _poll() {
-    if (!this.analyser) return
-    const buf = new Uint8Array(this.analyser.fftSize)
-    const tick = () => {
-      this.rafId = requestAnimationFrame(tick)
-      if (!this.active || this.triggered) return
-      this.analyser.getByteTimeDomainData(buf)
-      let sum = 0
-      for (let i = 0; i < buf.length; i++) { const v = buf[i] - 128; sum += v * v }
-      const rms = Math.sqrt(sum / buf.length)
-      if (rms > this.THRESHOLD) {
-        if (!this.aboveStart) this.aboveStart = Date.now()
-        else if (Date.now() - this.aboveStart >= this.HOLD_MS) {
-          this.triggered = true; this.active = false
-          this.onVoiceDetected()
-        }
-      } else { this.aboveStart = null }
-    }
-    tick()
-  }
-}
-
 export default function ProfessorNovaPage() {
   const { profile } = useAuth()
   const { group } = useGroup()
@@ -326,15 +275,13 @@ export default function ProfessorNovaPage() {
       if (voiceOnRef.current) {
         speakingRef.current = true
         setNovaState('speaking')
-        earRef.current?.pause()   // stop recognition — no echo while Nova speaks
-        vadRef.current?.arm()     // VAD watches for YOUR voice to trigger interrupt
+        earRef.current?.setNovaSpeaking(true)   // ACTIVATE filter — drop Nova's own voice
+        earRef.current?.resume()                 // mic open so YOU can interrupt
         speak(reply, () => {
-          // Nova finished speaking naturally
           speakingRef.current = false
-          vadRef.current?.disarm()
+          earRef.current?.setNovaSpeaking(false) // Nova done — accept all speech
           setNovaState('idle')
           setBoardVisible(false)
-          earRef.current?.resume()  // open mic for next question
         }, speakingRef)
       } else {
         setNovaState('idle')
@@ -365,20 +312,6 @@ export default function ProfessorNovaPage() {
       if (sendRef.current) sendRef.current(text)
     })
     earRef.current = ear
-
-    const vad = new VoiceActivityDetector(() => {
-      // YOUR voice detected while Nova was speaking — interrupt her
-      if (speakingRef.current) {
-        window.speechSynthesis.cancel()
-        speakingRef.current = false
-        vad.disarm()
-        setNovaState('idle')
-        setBoardVisible(false)
-        setTimeout(() => ear.resume(), 200)  // 200ms settle then open mic
-      }
-    })
-    vadRef.current = vad
-    vad.start()
 
     // Wake Render immediately on page load, then ping every 13 min
     // (Render free tier spins down after 15 min of inactivity)
