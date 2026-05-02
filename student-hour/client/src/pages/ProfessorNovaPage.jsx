@@ -255,6 +255,7 @@ export default function ProfessorNovaPage() {
   const [error, setError] = useState('')
 
   const earRef = useRef(null)
+  const vadRef = useRef(null)
   const loadingRef = useRef(false)
   const messagesRef = useRef([])
   const voiceOnRef = useRef(true)
@@ -277,7 +278,6 @@ export default function ProfessorNovaPage() {
     if (speakingRef.current) {
       window.speechSynthesis.cancel()
       speakingRef.current = false
-      earRef.current?.setNovaSpeaking(false)  // stop filtering — student is speaking
       setNovaState('idle')
       setBoardVisible(false)
     }
