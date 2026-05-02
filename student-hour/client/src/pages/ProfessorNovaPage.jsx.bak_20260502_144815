@@ -44,7 +44,6 @@ class NovaEar {
     this.rec = null
     this.running = false
     this.active = false  // recognition should be running
-    this.novaSpeaking = false
     this.restartT = null
   }
 
@@ -53,8 +52,6 @@ class NovaEar {
     this.active = true
     this._start()
   }
-
-  setNovaSpeaking(val) { this.novaSpeaking = val }
 
   // Fully STOP recognition — no echo possible when rec is not running
   pause() {
@@ -73,7 +70,6 @@ class NovaEar {
   close() {
     this.running = false
     this.active = false
-    this.novaSpeaking = false
     clearTimeout(this.restartT)
     this._kill()
   }
@@ -171,54 +167,24 @@ function getVoice() {
   ) || voices.find(v => v.lang?.startsWith('en')) || null
 }
 
-// Waits until voices are loaded then resolves — max 3s wait
-function waitForVoices() {
-  return new Promise((resolve) => {
-    const voices = window.speechSynthesis?.getVoices() || []
-    if (voices.length > 0) { resolve(voices); return }
-    // Voices not ready yet — wait for the event
-    let resolved = false
-    const handler = () => {
-      if (resolved) return
-      resolved = true
-      resolve(window.speechSynthesis.getVoices())
-    }
-    window.speechSynthesis.onvoiceschanged = handler
-    // Safety timeout — if event never fires, proceed anyway after 3s
-    setTimeout(() => { if (!resolved) { resolved = true; resolve([]) } }, 3000)
-  })
-}
-
 function speak(text, onDone, cancelRef) {
   if (!window.speechSynthesis) { onDone?.(); return }
   window.speechSynthesis.cancel()
-
-  // Wait for voices to be ready before speaking — fixes silent mouth bug
-  waitForVoices().then(() => {
-    // Check if cancelled while waiting for voices
+  const voice = getVoice()
+  const sentences = text.match(/[^.!?]+[.!?]*/g) || [text]
+  let i = 0
+  function next() {
     if (cancelRef && !cancelRef.current) { onDone?.(); return }
-
-    const voice = getVoice()
-    const sentences = text.match(/[^.!?]+[.!?]*/g) || [text]
-    let i = 0
-    function next() {
-      if (cancelRef && !cancelRef.current) { onDone?.(); return }
-      if (i >= sentences.length) { onDone?.(); return }
-      const s = sentences[i++].trim()
-      if (!s) { next(); return }
-      const u = new SpeechSynthesisUtterance(s)
-      u.rate = 0.86; u.pitch = 0.72; u.volume = 1
-      if (voice) u.voice = voice
-      u.onend = next
-      u.onerror = (e) => {
-        // On error, try next sentence rather than stopping entirely
-        console.warn('TTS error on sentence:', s, e)
-        next()
-      }
-      window.speechSynthesis.speak(u)
-    }
-    next()
-  })
+    if (i >= sentences.length) { onDone?.(); return }
+    const s = sentences[i++].trim()
+    if (!s) { next(); return }
+    const u = new SpeechSynthesisUtterance(s)
+    u.rate = 0.86; u.pitch = 0.72; u.volume = 1
+    if (voice) u.voice = voice
+    u.onend = next; u.onerror = next
+    window.speechSynthesis.speak(u)
+  }
+  next()
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -377,13 +343,15 @@ export default function ProfessorNovaPage() {
       if (voiceOnRef.current) {
         speakingRef.current = true
         setNovaState('speaking')
-        earRef.current?.setNovaSpeaking(true)
+        earRef.current?.pause()   // stop recognition — no echo while Nova speaks
+        vadRef.current?.arm()     // VAD watches for YOUR voice to trigger interrupt
         speak(reply, () => {
+          // Nova finished speaking naturally
           speakingRef.current = false
-          earRef.current?.setNovaSpeaking(false)
+          vadRef.current?.disarm()
           setNovaState('idle')
           setBoardVisible(false)
-          earRef.current?.resume()
+          earRef.current?.resume()  // open mic for next question
         }, speakingRef)
       } else {
         setNovaState('idle')

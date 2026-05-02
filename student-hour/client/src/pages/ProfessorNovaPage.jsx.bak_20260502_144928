@@ -377,13 +377,15 @@ export default function ProfessorNovaPage() {
       if (voiceOnRef.current) {
         speakingRef.current = true
         setNovaState('speaking')
-        earRef.current?.setNovaSpeaking(true)
+        earRef.current?.pause()   // stop recognition — no echo while Nova speaks
+        vadRef.current?.arm()     // VAD watches for YOUR voice to trigger interrupt
         speak(reply, () => {
+          // Nova finished speaking naturally
           speakingRef.current = false
-          earRef.current?.setNovaSpeaking(false)
+          vadRef.current?.disarm()
           setNovaState('idle')
           setBoardVisible(false)
-          earRef.current?.resume()
+          earRef.current?.resume()  // open mic for next question
         }, speakingRef)
       } else {
         setNovaState('idle')
