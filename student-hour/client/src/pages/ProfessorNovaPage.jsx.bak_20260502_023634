@@ -108,19 +108,22 @@ class NovaEar {
       if (!text || text.length < 2) return
 
       // ── SELF-VOICE FILTER ──────────────────────────────────────────
-      // While Nova is speaking, the mic stays open so the browser can
-      // detect when YOU start speaking (which cancels the TTS).
-      // But we must not send Nova's own voice to the API.
-      //
-      // Strategy: while novaSpeaking is true, drop ALL recognised text.
-      // When you actually speak and interrupt Nova, sendMessage() runs
-      // first — it calls setNovaSpeaking(false) before this onresult
-      // fires again. So your real words always get through on the next
-      // recognition cycle after the interruption clears the flag.
-      //
-      // This is simpler and more reliable than heuristics (length/conf)
-      // which were blocking real short interruptions like "stop", "wait".
-      if (this.novaSpeaking) return  // Nova is speaking — drop all, wait for interrupt
+      // While Nova is speaking the mic stays open so YOU can interrupt.
+      // But Nova's own TTS audio leaks into the mic and gets recognised.
+      // Her echo has two tell-tale signs:
+      //   1. Short fragments — echo tends to be 1-2 words / <12 chars
+      //   2. Near-perfect confidence (>0.97) — browser hears its own
+      //      clean speaker output and recognises it perfectly
+      // A real student interruption is usually 3+ words and confidence
+      // drops because there's room noise, breathing, accent, etc.
+      // So: during Nova's speech, drop anything that looks like echo.
+      if (this.novaSpeaking) {
+        const wordCount = text.split(/\s+/).length
+        const tooShort = text.length < 12 || wordCount < 3
+        const looksLikeEcho = bestConf > 0.97
+        if (tooShort || looksLikeEcho) return  // drop — Nova's own voice
+        // Passes both checks — this is a real human interruption
+      }
 
       this.paused = true  // prevent duplicate sends
       this.onSpeech(text)
@@ -275,14 +278,15 @@ export default function ProfessorNovaPage() {
       if (voiceOnRef.current) {
         speakingRef.current = true
         setNovaState('speaking')
-        earRef.current?.setNovaSpeaking(true)   // ACTIVATE filter — drop Nova's own voice
-        earRef.current?.resume()                 // mic open so YOU can interrupt
         speak(reply, () => {
           speakingRef.current = false
-          earRef.current?.setNovaSpeaking(false) // Nova done — accept all speech
           setNovaState('idle')
           setBoardVisible(false)
+          // Resume ear only after Nova finishes speaking — prevents echo
+          earRef.current?.resume()
         }, speakingRef)
+        // Small delay before opening mic so Nova's voice doesn't echo back
+        setTimeout(() => { if (speakingRef.current) earRef.current?.resume() }, 350)
       } else {
         setNovaState('idle')
         earRef.current?.resume()
