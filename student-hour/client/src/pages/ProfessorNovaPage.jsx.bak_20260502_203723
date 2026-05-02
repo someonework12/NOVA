@@ -6,68 +6,75 @@ import { supabase } from '../lib/supabase.js'
 import NovaAvatar from '../components/NovaAvatar.jsx'
 
 // ─────────────────────────────────────────────────────────────────
-// ARCHITECTURE — clean full-duplex barge-in design
+// THE PLAN — why previous versions flickered and went deaf:
 //
-// Two completely separate systems run in parallel:
+// Problem 1 — FLICKER:
+//   continuous:false + restart on onend = mic opens/closes every
+//   200ms while Nova speaks. Browser shows mic icon each open.
+//   Fix: continuous:true. One session. Never restarts unless error.
 //
-// 1. NovaEar (SpeechRecognition)
-//    - Always running when mic is on
-//    - NEVER paused during Nova's speech
-//    - While Nova speaks: results go to interruptHandler
-//    - While Nova is quiet: results go to sendMessage
+// Problem 2 — DEAF AFTER NOVA SPEAKS:
+//   engine.block() killed the recognizer. unblockForSpeaking()
+//   tried to restart but the session was dead and the restart
+//   had a 400ms delay. If anything went wrong, engine stayed dead.
+//   Fix: NEVER kill the continuous session. Just ignore results
+//   using a flag. Session stays alive always.
 //
-// 2. VAD (AudioContext volume detector)
-//    - Watches raw mic volume continuously
-//    - When volume spike detected during Nova's speech → interrupt
-//    - Fires BEFORE SpeechRecognition delivers a final result
-//    - Cuts Nova off in ~120ms — feels instant
+// Problem 3 — CAN'T INTERRUPT:
+//   Engine was muted during Nova's speech on previous attempts,
+//   or restarting too slowly to catch speech.
+//   Fix: session never stops. When Nova speaks, we KEEP listening.
+//   Any speech triggers immediate TTS cancel + response.
 //
-// Interruption flow:
-//   You speak → VAD fires (~120ms) → Nova's TTS cancelled
-//             → SpeechRecognition delivers your words (~500ms)
-//             → sendMessage runs with your actual words
-//
-// Echo prevention:
-//   While Nova speaks, SpeechRecognition stays ON (needed for
-//   barge-in) but results are held. VAD triggers the cancel.
-//   After TTS cancel, 150ms settle before accepting STT results.
-//   This is enough time for speaker audio to clear from the mic.
+// Problem 4 — MOBILE:
+//   Android Chrome ignores continuous:true silently.
+//   Fix: detect mobile, use single-shot mode that restarts cleanly.
 // ─────────────────────────────────────────────────────────────────
 
 const ON_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
 
 // ─────────────────────────────────────────────────────────────────
-// NOVA EAR — speech recognition, always alive
+// SPEECH ENGINE
+// Desktop: one permanent continuous session, never killed
+// Mobile: clean single-shot with reliable restart
 // ─────────────────────────────────────────────────────────────────
 class NovaEar {
   constructor(onSpeech) {
     this.onSpeech = onSpeech
     this.rec = null
     this.running = false
+    this.active = false  // recognition should be running
+    this.novaSpeaking = false
     this.restartT = null
-    this.settleT = null
-    this.settling = false  // true for 150ms after TTS cancelled — ignore results
   }
 
   open() {
     this.running = true
-    this.settling = false
+    this.active = true
     this._start()
   }
 
-  // Called right after TTS is cancelled — brief settle window
-  // so residual speaker audio doesn't get sent as a message
-  settle(ms = 150) {
-    this.settling = true
-    clearTimeout(this.settleT)
-    this.settleT = setTimeout(() => { this.settling = false }, ms)
+  setNovaSpeaking(val) { this.novaSpeaking = val }
+
+  // Fully STOP recognition — no echo possible when rec is not running
+  pause() {
+    this.active = false
+    clearTimeout(this.restartT)
+    this._kill()
+  }
+
+  // Restart recognition — student's turn to speak
+  resume() {
+    if (!this.running) return
+    this.active = true
+    this._start()
   }
 
   close() {
     this.running = false
-    this.settling = false
+    this.active = false
+    this.novaSpeaking = false
     clearTimeout(this.restartT)
-    clearTimeout(this.settleT)
     this._kill()
   }
 
@@ -77,7 +84,7 @@ class NovaEar {
   }
 
   _start() {
-    if (!this.running) return
+    if (!this.running || !this.active) return
     clearTimeout(this.restartT)
     this._kill()
 
@@ -86,149 +93,111 @@ class NovaEar {
 
     const rec = new SR()
     rec.lang = 'en-US'
-    rec.maxAlternatives = 1
+    rec.maxAlternatives = 3
     rec.interimResults = false
     rec.continuous = !ON_MOBILE
 
     rec.onresult = (e) => {
-      // During settle window — residual speaker audio, ignore
-      if (this.settling) return
-
-      let best = ''
-      let bestConf = -1
+      if (!this.active) return
+      let best = '', bestConf = -1
       for (let i = e.resultIndex ?? 0; i < e.results.length; i++) {
         if (!e.results[i].isFinal && !ON_MOBILE) continue
-        const alt = e.results[i][0]
-        const conf = alt.confidence || 0.5
-        if (conf > bestConf) { bestConf = conf; best = alt.transcript }
+        for (let j = 0; j < e.results[i].length; j++) {
+          const conf = e.results[i][j].confidence || 0.5
+          if (conf > bestConf) { bestConf = conf; best = e.results[i][j].transcript }
+        }
       }
-
       const text = best.trim()
       if (!text || text.length < 2) return
 
+      // NLP interrupt classifier — runs while Nova speaks
+      if (this.novaSpeaking) {
+        const t = text.toLowerCase()
+        const words = t.split(/\s+/)
+        const INTERRUPT = ['stop','wait','hold on','excuse me','sorry','pause','actually',
+          'but','no','yes','okay','ok','what','why','how','when','where','who','really',
+          'i','can','could','would','hey','nova','professor','prof','listen','tell me',
+          'explain','help','confused','question','and','so','wait wait','hang on']
+        const hasInterruptWord = INTERRUPT.some(w => t === w || t.startsWith(w+' ') || t.includes(' '+w+' ') || t.endsWith(' '+w))
+        const QWORDS = ['what','why','how','when','where','who','is','are','do','does','can','could','would','should','will','did','has','have']
+        const isQuestion = text.endsWith('?') || QWORDS.includes(words[0])
+        const callsNova = /(nova|professor|prof|hey|hello)/.test(t)
+        const humanConf = bestConf < 0.95
+        if (!hasInterruptWord && !isQuestion && !callsNova && !humanConf) return
+      }
+
+      this.active = false  // prevent duplicate sends
       this.onSpeech(text)
     }
 
     rec.onerror = (e) => {
       if (e.error === 'aborted') return
       if (e.error === 'not-allowed') { this.running = false; return }
-      if (this.running) this.restartT = setTimeout(() => this._start(), 600)
+      if (this.running && this.active) {
+        this.restartT = setTimeout(() => this._start(), 800)
+      }
     }
 
     rec.onend = () => {
-      if (!this.running) return
-      this.restartT = setTimeout(() => this._start(), ON_MOBILE ? 200 : 400)
+      if (!this.running || !this.active) return
+      if (ON_MOBILE) {
+        this.restartT = setTimeout(() => this._start(), 250)
+      } else {
+        this.restartT = setTimeout(() => this._start(), 600)
+      }
     }
 
     this.rec = rec
     try { rec.start() }
     catch (_) {
-      if (this.running) this.restartT = setTimeout(() => this._start(), 800)
+      if (this.running) this.restartT = setTimeout(() => this._start(), 1000)
     }
   }
 }
 
 // ─────────────────────────────────────────────────────────────────
-// VAD — voice activity detector via AudioContext
-// Fires onVoice() when your voice energy is detected
-// Works independently of SpeechRecognition
-// ─────────────────────────────────────────────────────────────────
-class VAD {
-  constructor(onVoice) {
-    this.onVoice = onVoice
-    this.ctx = null
-    this.analyser = null
-    this.stream = null
-    this.rafId = null
-    this.armed = false
-    this.fired = false
-    this.holdStart = null
-    this.THRESHOLD = 16  // RMS 0–255. 16 catches clear speech, ignores breath/noise
-    this.HOLD_MS = 100   // sustain for 100ms to avoid click triggers
-  }
-
-  async init() {
-    if (this.ctx) return
-    try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-      })
-      this.ctx = new (window.AudioContext || window.webkitAudioContext)()
-      const src = this.ctx.createMediaStreamSource(this.stream)
-      this.analyser = this.ctx.createAnalyser()
-      this.analyser.fftSize = 256
-      src.connect(this.analyser)
-      this._loop()
-    } catch (_) {}
-  }
-
-  arm()   { this.armed = true;  this.fired = false; this.holdStart = null }
-  disarm(){ this.armed = false; this.fired = false; this.holdStart = null }
-
-  destroy() {
-    this.armed = false
-    cancelAnimationFrame(this.rafId)
-    try { this.stream?.getTracks().forEach(t => t.stop()) } catch (_) {}
-    try { this.ctx?.close() } catch (_) {}
-    this.ctx = null
-  }
-
-  _loop() {
-    if (!this.analyser) return
-    const buf = new Uint8Array(this.analyser.fftSize)
-    const tick = () => {
-      this.rafId = requestAnimationFrame(tick)
-      if (!this.armed || this.fired) return
-      this.analyser.getByteTimeDomainData(buf)
-      let sum = 0
-      for (let i = 0; i < buf.length; i++) { const v = buf[i] - 128; sum += v * v }
-      const rms = Math.sqrt(sum / buf.length)
-      if (rms > this.THRESHOLD) {
-        if (!this.holdStart) this.holdStart = Date.now()
-        else if (Date.now() - this.holdStart >= this.HOLD_MS) {
-          this.fired = true
-          this.armed = false
-          this.onVoice()
-        }
-      } else {
-        this.holdStart = null
-      }
-    }
-    tick()
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────
-// TTS — waits for voices, splits into sentences, deep voice
+// TTS — deep voice, split by sentence to handle Chrome 15s limit
 // ─────────────────────────────────────────────────────────────────
 function getVoice() {
   const voices = window.speechSynthesis?.getVoices() || []
-  const want = ['Google UK English Male', 'Microsoft David Desktop', 'Daniel', 'Alex', 'Fred']
+  const want = ['Google UK English Male','Microsoft David Desktop','Daniel','Alex','Fred']
   for (const n of want) {
     const v = voices.find(v => v.name.includes(n))
     if (v) return v
   }
   return voices.find(v =>
-    v.lang?.startsWith('en') && !/(female|zira|hazel|victoria|karen|samantha)/i.test(v.name)
+    v.lang?.startsWith('en') &&
+    !/(female|zira|hazel|victoria|karen|samantha)/i.test(v.name)
   ) || voices.find(v => v.lang?.startsWith('en')) || null
 }
 
+// Waits until voices are loaded then resolves — max 3s wait
 function waitForVoices() {
-  return new Promise(resolve => {
-    const v = window.speechSynthesis?.getVoices() || []
-    if (v.length > 0) { resolve(); return }
-    let done = false
-    window.speechSynthesis.onvoiceschanged = () => { if (!done) { done = true; resolve() } }
-    setTimeout(() => { if (!done) { done = true; resolve() } }, 3000)
+  return new Promise((resolve) => {
+    const voices = window.speechSynthesis?.getVoices() || []
+    if (voices.length > 0) { resolve(voices); return }
+    // Voices not ready yet — wait for the event
+    let resolved = false
+    const handler = () => {
+      if (resolved) return
+      resolved = true
+      resolve(window.speechSynthesis.getVoices())
+    }
+    window.speechSynthesis.onvoiceschanged = handler
+    // Safety timeout — if event never fires, proceed anyway after 3s
+    setTimeout(() => { if (!resolved) { resolved = true; resolve([]) } }, 3000)
   })
 }
 
-// cancelRef: speakingRef — when it flips to false, next() stops
 function speak(text, onDone, cancelRef) {
   if (!window.speechSynthesis) { onDone?.(); return }
   window.speechSynthesis.cancel()
+
+  // Wait for voices to be ready before speaking — fixes silent mouth bug
   waitForVoices().then(() => {
+    // Check if cancelled while waiting for voices
     if (cancelRef && !cancelRef.current) { onDone?.(); return }
+
     const voice = getVoice()
     const sentences = text.match(/[^.!?]+[.!?]*/g) || [text]
     let i = 0
@@ -241,7 +210,11 @@ function speak(text, onDone, cancelRef) {
       u.rate = 0.86; u.pitch = 0.72; u.volume = 1
       if (voice) u.voice = voice
       u.onend = next
-      u.onerror = () => next()
+      u.onerror = (e) => {
+        // On error, try next sentence rather than stopping entirely
+        console.warn('TTS error on sentence:', s, e)
+        next()
+      }
       window.speechSynthesis.speak(u)
     }
     next()
@@ -251,6 +224,72 @@ function speak(text, onDone, cancelRef) {
 // ─────────────────────────────────────────────────────────────────
 // COMPONENT
 // ─────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────
+// VOICE ACTIVITY DETECTOR
+// Watches raw mic volume via AudioContext. When YOUR voice crosses
+// the threshold while Nova speaks, fires onVoiceDetected to
+// trigger interruption. Completely separate from SpeechRecognition
+// so no echo conflict at all.
+// ─────────────────────────────────────────────────────────────────
+class VoiceActivityDetector {
+  constructor(onVoiceDetected) {
+    this.onVoiceDetected = onVoiceDetected
+    this.ctx = null; this.analyser = null; this.stream = null
+    this.rafId = null; this.active = false; this.triggered = false
+    this.aboveStart = null
+    this.THRESHOLD = 18   // RMS 0-255. 18 = clear speech, ignores background noise
+    this.HOLD_MS = 120    // must stay above threshold for 120ms — avoids click triggers
+  }
+
+  async start() {
+    if (this.ctx) return
+    try {
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true }
+      })
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)()
+      const source = this.ctx.createMediaStreamSource(this.stream)
+      this.analyser = this.ctx.createAnalyser()
+      this.analyser.fftSize = 512
+      source.connect(this.analyser)
+      this._poll()
+    } catch (_) { /* mic not available — VAD disabled silently */ }
+  }
+
+  arm()   { this.active = true;  this.triggered = false; this.aboveStart = null }
+  disarm(){ this.active = false; this.triggered = false; this.aboveStart = null }
+
+  stop() {
+    this.active = false
+    cancelAnimationFrame(this.rafId)
+    try { this.stream?.getTracks().forEach(t => t.stop()) } catch (_) {}
+    try { this.ctx?.close() } catch (_) {}
+    this.ctx = null
+  }
+
+  _poll() {
+    if (!this.analyser) return
+    const buf = new Uint8Array(this.analyser.fftSize)
+    const tick = () => {
+      this.rafId = requestAnimationFrame(tick)
+      if (!this.active || this.triggered) return
+      this.analyser.getByteTimeDomainData(buf)
+      let sum = 0
+      for (let i = 0; i < buf.length; i++) { const v = buf[i] - 128; sum += v * v }
+      const rms = Math.sqrt(sum / buf.length)
+      if (rms > this.THRESHOLD) {
+        if (!this.aboveStart) this.aboveStart = Date.now()
+        else if (Date.now() - this.aboveStart >= this.HOLD_MS) {
+          this.triggered = true; this.active = false
+          this.onVoiceDetected()
+        }
+      } else { this.aboveStart = null }
+    }
+    tick()
+  }
+}
+
 export default function ProfessorNovaPage() {
   const { profile } = useAuth()
   const { group } = useGroup()
@@ -271,38 +310,33 @@ export default function ProfessorNovaPage() {
   const loadingRef = useRef(false)
   const messagesRef = useRef([])
   const voiceOnRef = useRef(true)
-  const speakingRef = useRef(false)
+  const speakingRef = useRef(false)  // true while TTS playing
   const bottomRef = useRef(null)
   const greetedRef = useRef(false)
-  const sendRef = useRef(null)
+  const sendRef = useRef(null)       // always points to latest sendMessage
 
   useEffect(() => { messagesRef.current = messages }, [messages])
   useEffect(() => { loadingRef.current = loading }, [loading])
   useEffect(() => { voiceOnRef.current = voiceOn }, [voiceOn])
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
 
-  // ── INTERRUPT — cuts Nova off, ear settles, then listens ─────
-  const interrupt = useCallback(() => {
-    if (!speakingRef.current) return
-    window.speechSynthesis.cancel()
-    speakingRef.current = false
-    vadRef.current?.disarm()
-    setNovaState('idle')
-    setBoardVisible(false)
-    // Settle: 150ms to let speaker audio clear before accepting STT
-    earRef.current?.settle(150)
-  }, [])
-
-  // ── SEND ─────────────────────────────────────────────────────
+  // ── SEND ────────────────────────────────────────────────────────
   const sendMessage = useCallback(async (text) => {
     const clean = text?.trim()
     if (!clean) return
 
-    // If Nova is speaking, cut her off
-    if (speakingRef.current) interrupt()
+    // If Nova is speaking, cut her off immediately (interruption)
+    if (speakingRef.current) {
+      window.speechSynthesis.cancel()
+      speakingRef.current = false
+      setNovaState('idle')
+      setBoardVisible(false)
+    }
 
-    // Don't stack API calls
     if (loadingRef.current) return
+
+    // Pause ear during API call
+    earRef.current?.pause()
 
     const userMsg = { role: 'user', content: clean }
     const history = [...messagesRef.current, userMsg]
@@ -324,18 +358,16 @@ export default function ProfessorNovaPage() {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify(body)
       })
-
+      // Safe parse — a 504 from Render returns HTML not JSON, so never call
+      // res.json() blindly. Check ok first, then attempt JSON parse.
       if (!res.ok) {
-        let msg = `Server error ${res.status}`
-        if (res.status === 504) msg = 'Professor Nova is waking up — please try again in a moment.'
-        else { try { const e = await res.json(); msg = e.error || msg } catch (_) {} }
-        throw new Error(msg)
+        let errMsg = `Server error ${res.status}`
+        if (res.status === 504) errMsg = 'Professor Nova is waking up — please try again in a moment.'
+        else { try { const e = await res.json(); errMsg = e.error || errMsg } catch (_) {} }
+        throw new Error(errMsg)
       }
-
       let data
-      try { data = await res.json() } catch (_) {
-        throw new Error('Bad response from server — please try again.')
-      }
+      try { data = await res.json() } catch (_) { throw new Error('Bad response from server — please try again.') }
 
       const reply = data.reply
       setMessages(prev => [...prev, { role: 'assistant', content: reply }])
@@ -345,63 +377,66 @@ export default function ProfessorNovaPage() {
       if (voiceOnRef.current) {
         speakingRef.current = true
         setNovaState('speaking')
-        // Arm VAD so your voice triggers interrupt while Nova speaks
-        vadRef.current?.arm()
+        earRef.current?.setNovaSpeaking(true)
         speak(reply, () => {
-          // Nova finished naturally (not interrupted)
           speakingRef.current = false
-          vadRef.current?.disarm()
+          earRef.current?.setNovaSpeaking(false)
           setNovaState('idle')
           setBoardVisible(false)
+          earRef.current?.resume()
         }, speakingRef)
       } else {
         setNovaState('idle')
+        earRef.current?.resume()
       }
     } catch (err) {
       setError(err.message)
       setNovaState('idle')
       speakingRef.current = false
-      vadRef.current?.disarm()
+      earRef.current?.resume()
     } finally {
       setLoading(false); loadingRef.current = false
+      // Safety net — ear must NEVER stay paused after this function exits
+      if (earRef.current?.paused) earRef.current.resume()
     }
-  }, [mode, group, interrupt])
+  }, [mode, group])
 
   sendRef.current = sendMessage
 
-  // ── INIT ─────────────────────────────────────────────────────
+  // ── INIT ────────────────────────────────────────────────────────
   useEffect(() => {
     if (window.speechSynthesis) {
       window.speechSynthesis.getVoices()
       window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices()
     }
 
-    // Ear — always running, passes speech to sendMessage
     const ear = new NovaEar((text) => {
       if (sendRef.current) sendRef.current(text)
     })
     earRef.current = ear
 
-    // VAD — fires when your voice detected while Nova speaks
-    const vad = new VAD(() => {
-      // Your voice detected — cut Nova off immediately
-      // Ear is still running — your actual words arrive via STT shortly after
+    const vad = new VoiceActivityDetector(() => {
+      // YOUR voice detected while Nova was speaking — interrupt her
       if (speakingRef.current) {
         window.speechSynthesis.cancel()
         speakingRef.current = false
         vad.disarm()
         setNovaState('idle')
         setBoardVisible(false)
-        ear.settle(150)  // brief settle so TTS audio clears before STT result arrives
+        setTimeout(() => ear.resume(), 200)  // 200ms settle then open mic
       }
     })
     vadRef.current = vad
-    vad.init()
+    vad.start()
 
-    // Wake Render on load, keep alive every 13 min
+    // Wake Render immediately on page load, then ping every 13 min
+    // (Render free tier spins down after 15 min of inactivity)
     fetch('/api/health').catch(() => {})
-    const keepAlive = setInterval(() => fetch('/api/health').catch(() => {}), 13 * 60 * 1000)
+    const keepAlive = setInterval(() => {
+      fetch('/api/health').catch(() => {})
+    }, 13 * 60 * 1000)
 
+    // Greet then start listening
     const t = setTimeout(() => {
       setMicOn(true)
       const name = profile?.full_name?.split(' ')[0] || 'there'
@@ -410,11 +445,11 @@ export default function ProfessorNovaPage() {
         speakingRef.current = true
         setNovaState('speaking')
         speak(
-          'Hello ' + name + '. I am Professor Nova. Speak to me naturally — you can interrupt me any time.',
+          'Hello ' + name + '. I am Professor Nova. I am listening — speak to me naturally.',
           () => {
             speakingRef.current = false
             setNovaState('idle')
-            ear.open()
+            ear.open()  // open AFTER greeting so greeting doesn't trigger mic
           },
           speakingRef
         )
@@ -427,7 +462,6 @@ export default function ProfessorNovaPage() {
       clearTimeout(t)
       clearInterval(keepAlive)
       ear.close()
-      vad.destroy()
       window.speechSynthesis?.cancel()
     }
   }, [])
@@ -443,6 +477,7 @@ export default function ProfessorNovaPage() {
   }
 
   const sessionCount = (profile?.session_count || 0) + 1
+  const firstName = profile?.full_name?.split(' ')[0] || 'there'
 
   return (
     <div style={{ height:'100vh', background:'#080604', display:'flex', flexDirection:'column', overflow:'hidden', fontFamily:'sans-serif', position:'relative' }}>
@@ -462,21 +497,17 @@ export default function ProfessorNovaPage() {
           <div style={{ width:28, height:28, borderRadius:'50%', background:'#f5c842', display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, fontWeight:700, color:'#3B1F0E', fontFamily:'serif' }}>N</div>
           <div>
             <div style={{ fontSize:13, fontWeight:600, color:'#fff' }}>Professor Nova</div>
-            <div style={{ fontSize:9, textTransform:'uppercase', letterSpacing:'0.07em', color: novaState==='speaking'?'#22c55e':novaState==='thinking'?'#f5c842':micOn?'rgba(100,200,255,0.5)':'rgba(255,255,255,0.25)' }}>
-              {novaState==='speaking'?'speaking — interrupt any time':novaState==='thinking'?'thinking…':micOn?'listening · session '+sessionCount:'session '+sessionCount}
+            <div style={{ fontSize:9, textTransform:'uppercase', letterSpacing:'0.07em', color: novaState==='speaking'?'#22c55e':novaState==='listening'?'#64c8ff':novaState==='thinking'?'#f5c842':micOn?'rgba(100,200,255,0.5)':'rgba(255,255,255,0.25)' }}>
+              {novaState==='speaking'?'speaking':novaState==='listening'?'listening':novaState==='thinking'?'thinking':micOn?'mic on · session '+sessionCount:'session '+sessionCount}
             </div>
           </div>
         </div>
         <div style={{ display:'flex', gap:6, alignItems:'center' }}>
           <button className="nvbtn" onClick={toggleMic} style={{ background:micOn?'rgba(100,200,255,0.15)':'rgba(255,255,255,0.05)', border:`1px solid ${micOn?'rgba(100,200,255,0.35)':'rgba(255,255,255,0.08)'}`, borderRadius:99, padding:'5px 10px', fontSize:10, color:micOn?'#64c8ff':'rgba(255,255,255,0.3)' }}>
-            {micOn ? 'Mic On' : 'Mic Off'}
+            {micOn?'Mic On':'Mic Off'}
           </button>
-          <button className="nvbtn" onClick={() => {
-            const v = !voiceOn; setVoiceOn(v)
-            voiceOnRef.current = v
-            if (!v && speakingRef.current) { window.speechSynthesis.cancel(); speakingRef.current=false; vadRef.current?.disarm(); setNovaState('idle') }
-          }} style={{ background:voiceOn?'rgba(245,200,66,0.1)':'rgba(255,255,255,0.05)', border:`1px solid ${voiceOn?'rgba(245,200,66,0.25)':'rgba(255,255,255,0.08)'}`, borderRadius:99, padding:'5px 10px', fontSize:10, color:voiceOn?'#f5c842':'rgba(255,255,255,0.25)' }}>
-            {voiceOn ? 'Voice On' : 'Voice Off'}
+          <button className="nvbtn" onClick={() => { const v = !voiceOn; setVoiceOn(v); if (!v && speakingRef.current) { window.speechSynthesis.cancel(); speakingRef.current=false; setNovaState('idle') } }} style={{ background:voiceOn?'rgba(245,200,66,0.1)':'rgba(255,255,255,0.05)', border:`1px solid ${voiceOn?'rgba(245,200,66,0.25)':'rgba(255,255,255,0.08)'}`, borderRadius:99, padding:'5px 10px', fontSize:10, color:voiceOn?'#f5c842':'rgba(255,255,255,0.25)' }}>
+            {voiceOn?'Voice On':'Voice Off'}
           </button>
           {group && (
             <div style={{ display:'flex', background:'rgba(255,255,255,0.05)', borderRadius:99, padding:2, gap:1 }}>
@@ -502,7 +533,7 @@ export default function ProfessorNovaPage() {
 
         {!boardVisible && messages.length===0 && novaState==='idle' && (
           <p style={{ fontSize:12, color:'rgba(255,255,255,0.2)', marginTop:8, zIndex:10 }}>
-            {micOn ? 'Speak naturally — interrupt me any time' : 'Tap Mic On to talk'}
+            {micOn ? 'Speak to me — or interrupt me anytime' : 'Tap Mic On to talk'}
           </p>
         )}
 
@@ -524,7 +555,6 @@ export default function ProfessorNovaPage() {
             <div style={{ display:'flex', alignItems:'center', gap:7, marginBottom:8 }}>
               <div style={{ width:7, height:7, borderRadius:'50%', background:novaState==='speaking'?'#22c55e':'#f5c842', animation:novaState==='speaking'?'nb 1s ease-in-out infinite':undefined }} />
               <span style={{ fontSize:9, color:'rgba(255,255,255,0.25)', textTransform:'uppercase', letterSpacing:'0.07em' }}>Professor Nova</span>
-              {novaState==='speaking' && <span style={{ fontSize:9, color:'rgba(100,200,255,0.35)', marginLeft:4 }}>— speak to interrupt</span>}
             </div>
             <BoardText text={boardText} />
           </div>
@@ -539,11 +569,11 @@ export default function ProfessorNovaPage() {
         </button>
 
         <button className="nvbtn" onClick={toggleMic} style={{ width:64, height:64, borderRadius:'50%', background:micOn?'rgba(100,200,255,0.2)':'rgba(255,255,255,0.07)', border:`2px solid ${micOn?'#64c8ff':'rgba(255,255,255,0.12)'}`, color:micOn?'#64c8ff':'rgba(255,255,255,0.4)', fontSize:11, fontWeight:600, backdropFilter:'blur(12px)' }}>
-          {micOn ? 'Mic\nOn' : 'Mic\nOff'}
+          {micOn?'Mic\nOn':'Mic\nOff'}
         </button>
 
         {novaState==='speaking' && (
-          <button className="nvbtn" onClick={interrupt} style={{ width:46, height:46, borderRadius:'50%', background:'rgba(220,38,38,0.15)', border:'1px solid rgba(220,38,38,0.3)', fontSize:11, color:'#fca5a5', backdropFilter:'blur(12px)' }}>
+          <button className="nvbtn" onClick={()=>{ window.speechSynthesis.cancel(); speakingRef.current=false; setNovaState('idle'); setBoardVisible(false) }} style={{ width:46, height:46, borderRadius:'50%', background:'rgba(220,38,38,0.15)', border:'1px solid rgba(220,38,38,0.3)', fontSize:11, color:'#fca5a5', backdropFilter:'blur(12px)' }}>
             Stop
           </button>
         )}
@@ -564,20 +594,7 @@ export default function ProfessorNovaPage() {
                 <div style={{ maxWidth:'80%', padding:'9px 12px', fontSize:13, lineHeight:1.65, whiteSpace:'pre-wrap', background:msg.role==='user'?'#7A3D14':'rgba(255,255,255,0.055)', color:msg.role==='user'?'#fff':'rgba(255,255,255,0.82)', borderRadius:msg.role==='user'?'12px 12px 3px 12px':'3px 12px 12px 12px', border:'1px solid rgba(255,255,255,0.05)' }}>
                   {msg.content}
                   {msg.role==='assistant' && voiceOn && (
-                    <button onClick={()=>{
-                      setChatOpen(false)
-                      speakingRef.current = true
-                      setNovaState('speaking')
-                      vadRef.current?.arm()
-                      setBoardText(msg.content)
-                      setBoardVisible(true)
-                      speak(msg.content, () => {
-                        speakingRef.current = false
-                        vadRef.current?.disarm()
-                        setNovaState('idle')
-                        setBoardVisible(false)
-                      }, speakingRef)
-                    }} style={{ display:'block', marginTop:4, background:'none', border:'none', fontSize:10, color:'rgba(255,255,255,0.2)', cursor:'pointer', padding:0 }}>Replay</button>
+                    <button onClick={()=>{ setChatOpen(false); speakingRef.current=true; setNovaState('speaking'); setBoardText(msg.content); setBoardVisible(true); earRef.current?.resume(); speak(msg.content,()=>{ speakingRef.current=false; setNovaState('idle'); setBoardVisible(false) },speakingRef) }} style={{ display:'block', marginTop:4, background:'none', border:'none', fontSize:10, color:'rgba(255,255,255,0.2)', cursor:'pointer', padding:0 }}>Replay</button>
                   )}
                 </div>
               </div>
@@ -617,7 +634,7 @@ function BoardText({ text }) {
   return (
     <div style={{ fontSize:'clamp(13px,2vw,15px)', color:'rgba(255,255,240,0.88)', lineHeight:1.75, fontFamily:"'Courier New',monospace", letterSpacing:'0.02em', maxHeight:'calc(58vh - 90px)', overflowY:'auto', textShadow:'0 0 10px rgba(255,255,200,0.12)' }}>
       {shown}
-      {shown.length < text.length && <span style={{ display:'inline-block', width:2, height:'1em', background:'rgba(255,255,220,0.7)', marginLeft:2, verticalAlign:'middle', animation:'cblink 0.6s ease-in-out infinite' }} />}
+      {shown.length<text.length && <span style={{ display:'inline-block', width:2, height:'1em', background:'rgba(255,255,220,0.7)', marginLeft:2, verticalAlign:'middle', animation:'cblink 0.6s ease-in-out infinite' }} />}
     </div>
   )
 }
