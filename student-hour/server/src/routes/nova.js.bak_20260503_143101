@@ -321,6 +321,8 @@ router.get('/memory', async (req, res) => {
 // Also accepts voice recording for teaching style training
 // ─────────────────────────────────────────────────────────────────
 router.post('/upload-material', upload.single('file'), async (req, res) => {
+  req.socket.setTimeout(120000)
+  res.setTimeout(120000)
   const tmpPath = req.file?.path
   try {
     if (!req.file) return res.status(400).json({ error: 'No file received' })

@@ -233,14 +233,14 @@ function CourseCard({ course, studentId, expanded, onToggle, onRemove }) {
 
     try {
       const controller = new AbortController()
-      const _tid = setTimeout(() => controller.abort(), 120000)
+      const tid = setTimeout(() => controller.abort(), 120000)
       const res = await fetch(`${import.meta.env.VITE_API_URL || ''}/api/nova/upload-material`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${session.access_token}` },
         body: fd,
         signal: controller.signal
       })
-      clearTimeout(_tid)
+      clearTimeout(tid)
       // Safe JSON parse — server may return HTML on timeout/crash
       let data = {}
       try { data = await res.json() } catch (_) {}
