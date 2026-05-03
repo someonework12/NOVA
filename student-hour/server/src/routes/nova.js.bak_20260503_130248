@@ -10,7 +10,7 @@ import { adminSupabase } from '../middleware/auth.js'
 const router = Router()
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 const MODEL = 'llama-3.3-70b-versatile'
-const upload = multer({ dest: '/tmp/nova-uploads/', limits: { fileSize: 40 * 1024 * 1024 } })
+const upload = multer({ dest: '/tmp/nova-uploads/', limits: { fileSize: 15 * 1024 * 1024 } })
 
 // ─────────────────────────────────────────────────────────────────
 // PEDAGOGICAL INTELLIGENCE ENGINE
@@ -356,7 +356,7 @@ router.post('/upload-material', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'Unsupported file type. Upload PDF, DOCX, TXT, or audio (MP3, M4A, WAV).' })
     }
 
-    const trimmed = textContent.replace(/\s+/g, ' ').trim().slice(0, 40000)
+    const trimmed = textContent.replace(/\s+/g, ' ').trim().slice(0, 15000)
     if (trimmed.length < 50) return res.status(400).json({ error: 'Could not extract text from this file. Try a text-based PDF.' })
 
     const insertData = {

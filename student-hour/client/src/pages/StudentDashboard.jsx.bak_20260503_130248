@@ -221,9 +221,9 @@ function CourseCard({ course, studentId, expanded, onToggle, onRemove }) {
   async function uploadPDF(e) {
     const file = e.target.files?.[0]
     if (!file) return
-    if (file.size > 40 * 1024 * 1024) { setUploadMsg('File too large. Max 40MB.'); return }
+    if (file.size > 15 * 1024 * 1024) { setUploadMsg('File too large. Max 15MB.'); return }
 
-    setUploading(true); setUploadMsg('⏳ Uploading and extracting text — large files may take up to 60 seconds...')
+    setUploading(true); setUploadMsg('')
     const { data: { session } } = await supabase.auth.getSession()
     const fd = new FormData()
     fd.append('file', file)
@@ -237,10 +237,8 @@ function CourseCard({ course, studentId, expanded, onToggle, onRemove }) {
         headers: { Authorization: `Bearer ${session.access_token}` },
         body: fd
       })
-      // Safe JSON parse — server may return HTML on timeout/crash
-      let data = {}
-      try { data = await res.json() } catch (_) {}
-      if (!res.ok) throw new Error(data.error || `Upload failed (${res.status}) — try a smaller file or check your connection`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Upload failed')
       setUploadMsg(`✅ "${data.file_name}" uploaded — Nova can now teach from it.`)
       // Refresh materials list
       const { data: mats } = await supabase.from('nova_materials')
