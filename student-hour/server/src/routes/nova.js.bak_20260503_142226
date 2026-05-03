@@ -321,8 +321,6 @@ router.get('/memory', async (req, res) => {
 // Also accepts voice recording for teaching style training
 // ─────────────────────────────────────────────────────────────────
 router.post('/upload-material', upload.single('file'), async (req, res) => {
-  req.socket.setTimeout(120000)
-  res.setTimeout(120000)
   const tmpPath = req.file?.path
   try {
     if (!req.file) return res.status(400).json({ error: 'No file received' })
@@ -337,7 +335,7 @@ router.post('/upload-material', upload.single('file'), async (req, res) => {
 
     if (ext === '.pdf') {
       const buffer = fs.readFileSync(tmpPath)
-      const parsed = await pdfParse(buffer, { max: 0 })
+      const parsed = await pdfParse(buffer)
       textContent = parsed.text
     } else if (ext === '.docx') {
       const buffer = fs.readFileSync(tmpPath)
@@ -358,7 +356,7 @@ router.post('/upload-material', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'Unsupported file type. Upload PDF, DOCX, TXT, or audio (MP3, M4A, WAV).' })
     }
 
-    const trimmed = textContent.replace(/\s+/g, ' ').trim().slice(0, 500000)
+    const trimmed = textContent.replace(/\s+/g, ' ').trim().slice(0, 40000)
     if (trimmed.length < 50) return res.status(400).json({ error: 'Could not extract text from this file. Try a text-based PDF.' })
 
     const insertData = {

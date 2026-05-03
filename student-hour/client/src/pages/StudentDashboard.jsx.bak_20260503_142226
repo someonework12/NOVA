@@ -232,15 +232,11 @@ function CourseCard({ course, studentId, expanded, onToggle, onRemove }) {
     fd.append('courseTitle', course.course_title)
 
     try {
-      const controller = new AbortController()
-      const tid = setTimeout(() => controller.abort(), 120000)
       const res = await fetch(`${import.meta.env.VITE_API_URL || ''}/api/nova/upload-material`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${session.access_token}` },
-        body: fd,
-        signal: controller.signal
+        body: fd
       })
-      clearTimeout(tid)
       // Safe JSON parse — server may return HTML on timeout/crash
       let data = {}
       try { data = await res.json() } catch (_) {}
@@ -316,7 +312,7 @@ function CourseCard({ course, studentId, expanded, onToggle, onRemove }) {
               style={{ display:'inline-flex', alignItems:'center', gap:8, padding:'9px 16px', background:'var(--brown-900)', color:'#fff', borderRadius:8, fontSize:13, cursor:'pointer', fontFamily:'var(--font-sans)', opacity: uploading ? 0.6 : 1 }}>
               {uploading ? '⏳ Uploading...' : '+ Upload PDF / DOCX'}
             </label>
-            <span style={{ fontSize:11, color:'var(--text-muted)', marginLeft:10 }}>Max 40MB · PDF, DOCX, TXT</span>
+            <span style={{ fontSize:11, color:'var(--text-muted)', marginLeft:10 }}>Max 15MB · PDF, DOCX, TXT</span>
           </div>
 
           {uploadMsg && (
