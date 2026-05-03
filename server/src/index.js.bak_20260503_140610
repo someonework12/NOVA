@@ -1,12 +1,17 @@
+// ─────────────────────────────────────────────────────────────────
+// server/src/index.js — UPLOAD PATCH
+// Changes from original:
+//   1. express.json body limit raised from 50mb → 50mb (unchanged — already fine)
+//   2. Added global request timeout of 120s to prevent Render/Netlify 504s
+//   3. Added multer-specific 413 error handler so frontend gets clear message
+// ─────────────────────────────────────────────────────────────────
+
 import express from 'express'
 import cors from 'cors'
 import dotenv from 'dotenv'
 import { authMiddleware } from './middleware/auth.js'
 import groupingRoutes from './routes/grouping.js'
 import novaRoutes from './routes/nova.js'
-import tutorRoutes from './routes/tutor.js'
-import adminRoutes from './routes/admin.js'
-import scheduleRoutes from './routes/schedule.js'
 
 dotenv.config()
 
@@ -26,10 +31,10 @@ app.use(cors({
   credentials: true
 }))
 
-// Global 120s timeout — prevents 504 on Render during large PDF uploads
+// ── PATCH: 120-second global timeout so Render doesn't 504 on large PDF parse ──
 app.use((req, res, next) => {
   res.setTimeout(120_000, () => {
-    if (!res.headersSent) res.status(504).json({ error: 'Request timed out. Try a smaller file or split the PDF.' })
+    res.status(504).json({ error: 'Request timed out. Try uploading a smaller file or splitting the PDF into parts.' })
   })
   next()
 })
@@ -40,11 +45,8 @@ app.get('/api/health', (_, res) => res.json({ status: 'ok', service: 'The Studen
 
 app.use('/api/grouping', authMiddleware, groupingRoutes)
 app.use('/api/nova',     authMiddleware, novaRoutes)
-app.use('/api/tutor',   authMiddleware, tutorRoutes)
-app.use('/api/admin',   authMiddleware, adminRoutes)
-app.use('/api/schedule', authMiddleware, scheduleRoutes)
 
-// Catch multer file-too-large before generic handler
+// ── PATCH: catch multer file-too-large errors before the generic handler ──
 app.use((err, req, res, next) => {
   if (err.code === 'LIMIT_FILE_SIZE') {
     return res.status(413).json({ error: 'File is too large. Maximum allowed size is 40 MB.' })
