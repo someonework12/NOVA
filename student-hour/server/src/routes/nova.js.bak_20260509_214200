@@ -238,60 +238,6 @@ function extractKnowledgeTrace(memoryRows) {
 // ─────────────────────────────────────────────────────────────────
 // POST /chat
 // ─────────────────────────────────────────────────────────────────
-
-// ─────────────────────────────────────────────────────────────────
-// TRAINING DATA COLLECTION
-// ─────────────────────────────────────────────────────────────────
-async function saveTrainingData(studentId, messages, reply, emotionalState, courses) {
-  try {
-    const lastMessage = messages.at(-1)
-    if (!lastMessage || reply.length < 80) return
-    const context = messages.slice(-3, -1).map(m => `${m.role}: ${m.content}`).join('\n').slice(0, 600)
-    await adminSupabase.from('nova_training_data').insert({
-      student_id:      studentId,
-      instruction:     lastMessage.content.slice(0, 600),
-      context:         context || null,
-      ideal_response:  reply.slice(0, 3000),
-      course_code:     courses?.[0]?.course_code || null,
-      topic:           detectTopic(lastMessage.content),
-      emotional_state: emotionalState,
-      quality_score:   scoreResponse(reply)
-    })
-  } catch (err) { console.error('Training data save error:', err.message) }
-}
-
-function detectTopic(text) {
-  const t = text.toLowerCase()
-  if (/integrat|derivat|calculus|differentiat/.test(t)) return 'calculus'
-  if (/algebra|equation|quadratic|factor/.test(t)) return 'algebra'
-  if (/probability|statistic|mean|variance/.test(t)) return 'statistics'
-  if (/physic|force|motion|energy|wave/.test(t)) return 'physics'
-  if (/chemi|molecule|atom|reaction|bond/.test(t)) return 'chemistry'
-  if (/biology|cell|gene|evolution|organ/.test(t)) return 'biology'
-  if (/programming|code|algorithm|function|loop/.test(t)) return 'programming'
-  if (/english|grammar|essay|literature/.test(t)) return 'english'
-  if (/economics|supply|demand|market/.test(t)) return 'economics'
-  return 'general'
-}
-
-function scoreResponse(reply) {
-  let score = 3
-  if (reply.length > 400) score++
-  if (reply.includes('?')) score++
-  if (reply.length < 120) score--
-  return Math.min(5, Math.max(1, score))
-}
-
-function detectLanguageMix(text) {
-  const t = text.toLowerCase()
-  const mixes = []
-  if (/\b(na|wetin|abeg|abi|shey|dey|wahala|no be|e don|make i|una|dem)\b/.test(t)) mixes.push('pidgin')
-  if (/\b(omo|ehn|sha|biko|jare|kini|bawo|ehen|toh)\b/.test(t)) mixes.push('yoruba')
-  if (/\b(biko|nna|nne|chai|chineke|gini|kedu)\b/.test(t)) mixes.push('igbo')
-  if (/\b(kai|wallahi|haba|yauwa|sannu|nagode)\b/.test(t)) mixes.push('hausa')
-  return mixes.length === 0 ? 'english-only' : `english-${mixes.join('-')}`
-}
-
 router.post('/chat', async (req, res) => {
   try {
     const { messages } = req.body
@@ -320,8 +266,6 @@ router.post('/chat', async (req, res) => {
       maxTokens: 1200,
       temperature: 0.82
     })
-
-    saveTrainingData(sid, messages, reply, emotionalState, courses)
 
     await Promise.all([
       adminSupabase.from('nova_memory').insert({
@@ -470,76 +414,6 @@ router.get('/knowledge-trace', async (req, res) => {
       .select('content').eq('student_id', req.user.id)
       .order('created_at', { ascending: false }).limit(30)
     res.json({ trace: extractKnowledgeTrace(data || []) })
-  } catch (err) { res.status(500).json({ error: err.message }) }
-})
-
-
-// ─────────────────────────────────────────────────────────────────
-// POST /save-voice — saves student voice clip + transcript
-// ─────────────────────────────────────────────────────────────────
-const voiceUpload = multer({ dest: '/tmp/nova-voice/', limits: { fileSize: 5 * 1024 * 1024 } })
-
-router.post('/save-voice', voiceUpload.single('audio'), async (req, res) => {
-  const tmpPath = req.file?.path
-  try {
-    if (!req.file) return res.status(400).json({ error: 'No audio received' })
-    const sid = req.user.id
-    const { transcript, novaResponse, emotionalState, courseCode } = req.body
-    const languageMix = detectLanguageMix(transcript || '')
-    const audioBuffer = fs.readFileSync(tmpPath)
-    const fileName = `${sid}/${Date.now()}.webm`
-    const { error: uploadError } = await adminSupabase.storage
-      .from('voice-training').upload(fileName, audioBuffer, { contentType: 'audio/webm' })
-    if (uploadError) throw new Error(uploadError.message)
-    const { data: { publicUrl } } = adminSupabase.storage.from('voice-training').getPublicUrl(fileName)
-    await adminSupabase.from('nova_voice_data').insert({
-      student_id:       sid,
-      audio_url:        publicUrl,
-      transcript:       transcript?.slice(0, 500) || null,
-      detected_emotion: emotionalState || 'neutral',
-      language_mix:     languageMix,
-      course_code:      courseCode || null,
-      nova_response:    novaResponse?.slice(0, 500) || null
-    })
-    res.json({ success: true })
-  } catch (err) {
-    console.error('Voice save error:', err.message)
-    res.status(500).json({ error: err.message })
-  } finally {
-    if (tmpPath) { try { fs.unlinkSync(tmpPath) } catch (_) {} }
-  }
-})
-
-// ─────────────────────────────────────────────────────────────────
-// GET /training-stats — see your dataset progress
-// ─────────────────────────────────────────────────────────────────
-router.get('/training-stats', async (req, res) => {
-  try {
-    const [textRes, voiceRes, topicRes, langRes] = await Promise.all([
-      adminSupabase.from('nova_training_data').select('id', { count: 'exact', head: true }),
-      adminSupabase.from('nova_voice_data').select('id', { count: 'exact', head: true }),
-      adminSupabase.from('nova_training_data').select('topic'),
-      adminSupabase.from('nova_voice_data').select('language_mix')
-    ])
-    const topicCounts = {}
-    topicRes.data?.forEach(r => { topicCounts[r.topic] = (topicCounts[r.topic] || 0) + 1 })
-    const langCounts = {}
-    langRes.data?.forEach(r => { langCounts[r.language_mix] = (langCounts[r.language_mix] || 0) + 1 })
-    const textCount  = textRes.count  || 0
-    const voiceCount = voiceRes.count || 0
-    res.json({
-      text_conversations: textCount,
-      voice_recordings:   voiceCount,
-      readiness: {
-        fine_tuning_3b_ready:  textCount >= 500,
-        fine_tuning_8b_ready:  textCount >= 1000,
-        whisper_ready:         voiceCount >= 1000,
-        text_needed:  Math.max(0, 500  - textCount),
-        voice_needed: Math.max(0, 1000 - voiceCount)
-      },
-      topics:    topicCounts,
-      languages: langCounts
-    })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
