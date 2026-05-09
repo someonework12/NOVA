@@ -21,54 +21,6 @@ const GROQ_MODEL   = 'llama-3.3-70b-versatile'
 const GEMINI_URL   = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent'
 const GEMINI_KEY   = process.env.GEMINI_API_KEY
 
-
-// ─────────────────────────────────────────────────────────────────
-// RAG — Retrieval Augmented Generation
-// Calls the Python RAG microservice for semantic PDF search
-// ─────────────────────────────────────────────────────────────────
-const RAG_URL = process.env.RAG_SERVICE_URL || 'http://localhost:8001'
-
-async function ragIndex(studentId, materialId, fileName, courseCode, content) {
-  try {
-    const res = await fetch(`${RAG_URL}/index`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ student_id: studentId, material_id: materialId, file_name: fileName, course_code: courseCode, content })
-    })
-    const data = await res.json()
-    console.log(`RAG indexed ${data.chunks_indexed} chunks for ${fileName}`)
-    return data
-  } catch (err) {
-    console.log('RAG service unavailable — falling back to direct content:', err.message)
-    return null
-  }
-}
-
-async function ragSearch(studentId, query, courseCode = null) {
-  try {
-    const res = await fetch(`${RAG_URL}/search`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ student_id: studentId, query, course_code: courseCode, n_results: 4 })
-    })
-    const data = await res.json()
-    return data.results || []
-  } catch (err) {
-    console.log('RAG search unavailable:', err.message)
-    return []
-  }
-}
-
-async function ragDelete(studentId, materialId) {
-  try {
-    await fetch(`${RAG_URL}/material`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ student_id: studentId, material_id: materialId })
-    })
-  } catch (_) {}
-}
-
 const upload = multer({
   dest: '/tmp/nova-uploads/',
   limits: { fileSize: 40 * 1024 * 1024 } // 40MB
@@ -346,28 +298,18 @@ router.post('/chat', async (req, res) => {
     if (!messages?.length) return res.status(400).json({ error: 'No messages provided' })
     const sid = req.user.id
 
-    const [pRes, cRes, mRes] = await Promise.all([
+    const [pRes, cRes, mRes, matRes] = await Promise.all([
       adminSupabase.from('profiles').select('*').eq('id', sid).single(),
       adminSupabase.from('student_courses').select('*').eq('student_id', sid),
       adminSupabase.from('nova_memory').select('content').eq('student_id', sid).order('created_at', { ascending: false }).limit(15),
+      adminSupabase.from('nova_materials').select('file_name, content, course_id, course_code').eq('student_id', sid).order('created_at', { ascending: false }).limit(4)
     ])
-
-    // RAG search — find most relevant PDF chunks for this specific question
-    const lastUserMessage = messages.at(-1)?.content || ''
-    const ragResults = await ragSearch(sid, lastUserMessage)
 
     const profile = pRes.data
     const courses = cRes.data || []
     const memoryRows = mRes.data || []
     const memory = memoryRows.map(m => m.content).join('\n') || null
-    // Convert RAG results into material format for buildPrompt
-    const materials = ragResults.length > 0
-      ? ragResults.map(r => ({
-          file_name:   r.file_name,
-          course_code: r.course_code,
-          content:     `[${r.relevance}% relevant] ${r.content}`
-        }))
-      : []
+    const materials = matRes.data || []
     const emotionalState = detectEmotionalState(messages)
     const knowledgeTrace = extractKnowledgeTrace(memoryRows)
     const sessionNum = (profile?.session_count || 0) + 1
@@ -479,22 +421,16 @@ router.post('/upload-material', upload.single('file'), async (req, res) => {
 
     // Store full content — Supabase text column has no practical limit
     // We chunk intelligently when feeding to Nova (in buildPrompt above)
-    const { data: insertedMat, error } = await adminSupabase.from('nova_materials').insert({
+    const { error } = await adminSupabase.from('nova_materials').insert({
       student_id:  sid,
       file_name:   originalName,
-      content:     cleaned,
+      content:     cleaned,           // full text — no arbitrary slice
       chars:       cleaned.length,
       course_id:   courseId,
       course_code: courseCode,
       course_title: courseTitle
-    }).select('id').single()
+    })
     if (error) throw new Error(error.message)
-
-    // Index into RAG for semantic search (async — don't block response)
-    if (insertedMat?.id) {
-      ragIndex(sid, insertedMat.id, originalName, courseCode, cleaned)
-        .catch(err => console.log('RAG index error (non-fatal):', err.message))
-    }
 
     const pages = Math.round(cleaned.length / 2500) // rough page estimate
     res.json({
